@@ -1,0 +1,9 @@
+[workspace]
+
+members = [
+		"ww",
+		"api",
+		"basic_client",
+		"client",
+]
+resolver = "2"

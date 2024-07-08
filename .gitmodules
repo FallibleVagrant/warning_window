@@ -1,0 +1,3 @@
+[submodule "client/adhocrays"]
+	path = client/adhocrays
+	url = https://github.com/falliblevagrant/adhocrays
