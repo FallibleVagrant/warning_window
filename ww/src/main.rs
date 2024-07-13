@@ -8,6 +8,7 @@ use crossterm::{
     cursor,
     QueueableCommand,
     ExecutableCommand,
+    queue,
 };
 
 enum WarnStates {
@@ -120,18 +121,24 @@ fn draw(warn_state: &WarnStates) -> io::Result<()> {
     let mut stdout = stdout();
 
     //Debug information in top left.
-    stdout.queue(cursor::MoveTo(0, 0))?
-        .queue(style::Print(format!("ascii_x: {}", ascii_x)))?.queue(cursor::MoveToNextLine(1))?
-        .queue(style::Print(format!("ascii_y: {}", ascii_y)))?.queue(cursor::MoveToNextLine(1))?
-        .queue(style::Print(format!("cols: {}", cols)))?.queue(cursor::MoveToNextLine(1))?
-        .queue(style::Print(format!("rows: {}", rows)))?.queue(cursor::MoveToNextLine(1))?;
+    queue!(
+        stdout,
+        cursor::MoveTo(0, 0),
+        style::Print(format!("ascii_x: {}", ascii_x)), cursor::MoveToNextLine(1),
+        style::Print(format!("ascii_y: {}", ascii_y)), cursor::MoveToNextLine(1),
+        style::Print(format!("cols: {}", cols)), cursor::MoveToNextLine(1),
+        style::Print(format!("rows: {}", rows)), cursor::MoveToNextLine(1),
+    )?;
 
-    stdout.queue(cursor::MoveTo(ascii_x, ascii_y))?;
+    queue!(stdout, cursor::MoveTo(ascii_x, ascii_y))?;
     let ascii_art = warn_state.get_ascii_art();
     for line in ascii_art.lines() {
-        stdout.queue(style::Print(line))?
-            .queue(cursor::MoveDown(1))?
-            .queue(cursor::MoveToColumn(ascii_x))?;
+        queue!(
+            stdout,
+            style::Print(line),
+            cursor::MoveDown(1),
+            cursor::MoveToColumn(ascii_x),
+        )?;
     }
 
     stdout.flush()?;
@@ -448,15 +455,15 @@ struct WindowContext {}
 impl WindowContext {
     fn new() -> WindowContext {
         terminal::enable_raw_mode().unwrap();
-        stdout().execute(terminal::EnterAlternateScreen);
-        stdout().execute(terminal::Clear(terminal::ClearType::All));
+        execute!(stdout(), terminal::EnterAlternateScreen).unwrap();
+        execute!(stdout(), terminal::Clear(terminal::ClearType::All)).unwrap();
         return WindowContext {};
     }
 }
 
 impl Drop for WindowContext {
     fn drop(&mut self) {
-        stdout().execute(terminal::LeaveAlternateScreen);
+        execute!(stdout(), terminal::LeaveAlternateScreen);
     }
 }
 
