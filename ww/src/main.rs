@@ -1,13 +1,13 @@
-use adhocrays::*;
-
-use std::io::stdout;
-use std::time::Duration;
+use std::io::{self, stdout};
 
 use crossterm::{
     event::{poll, read, Event, KeyCode, KeyModifiers},
     execute,
-    style::{Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor},
+    style::{self, Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor},
     terminal,
+    cursor,
+    QueueableCommand,
+    ExecutableCommand,
 };
 
 enum WarnStates {
@@ -19,7 +19,11 @@ enum WarnStates {
 impl WarnStates {
     fn get_ascii_art(&self) -> &str {
         match self {
-            Self::None => concat!("  / \\  \n", "       \n", "  \\ /  \n",),
+            Self::None => concat!(
+                "  / \\  \n",
+                "       \n",
+                "  \\ /  \n",
+            ),
             Self::Warn => concat!(
                 "       \n",
                 "       \n",
@@ -27,7 +31,12 @@ impl WarnStates {
                 "  /|\\  \n",
                 "       \n",
             ),
-            Self::Alert => concat!("   .   \n", "  / \\  \n", " / ! \\ \n", "+-----+\n",),
+            Self::Alert => concat!(
+                "   .   \n",
+                "  / \\  \n",
+                " / ! \\ \n",
+                "+-----+\n",
+            ),
         }
     }
 
@@ -45,24 +54,9 @@ impl WarnStates {
 
     fn get_color(&self) -> Color {
         match self {
-            Self::None => Color {
-                r: 24,
-                g: 24,
-                b: 24,
-                a: 255,
-            },
-            Self::Warn => Color {
-                r: 244,
-                g: 131,
-                b: 37,
-                a: 255,
-            }, //Also try #FF9F43.
-            Self::Alert => Color {
-                r: 179,
-                g: 0,
-                b: 0,
-                a: 255,
-            },
+            Self::None => Color::Rgb { r: 24, g: 24, b: 24, },
+            Self::Warn => Color::Rgb { r: 244, g: 131, b: 37, }, //Also try #FF9F43.
+            Self::Alert => Color::Rgb { r: 179, g: 0, b: 0, },
         }
     }
 }
@@ -74,7 +68,7 @@ use std::net::{TcpListener, TcpStream};
 
 use std::sync::mpsc::Receiver;
 
-fn update_state(warn_state: &mut WarnStates, text: &mut String, rx: &Receiver<Packet>) {
+fn update_state(warn_state: &mut WarnStates, window_should_close: &mut bool, rx: &Receiver<Packet>) {
     //We have a received a packet when packet is Some.
     //I initially went with a packet_received variable, but the borrow checker complained
     //about borrowing a variable that moved between loops *despite being assigned*.
@@ -91,18 +85,18 @@ fn update_state(warn_state: &mut WarnStates, text: &mut String, rx: &Receiver<Pa
         },
     }
 
-    if is_key_pressed(Key::R) {
-        *warn_state = WarnStates::None;
-    }
+    // if is_key_pressed(Key::R) {
+    //     *warn_state = WarnStates::None;
+    // }
 
     if packet.is_some() {
         let packet = packet.unwrap();
         if packet.text.is_some() {
             //WARN: text should be sanitized as adhocrays can't handle UTF8 with NULLs in the
             //middle of a string.
-            *text = packet.text.unwrap();
+            //*text = packet.text.unwrap();
         } else {
-            // println!("");
+            // writeln!(log, "");
         }
         match packet.packet_type {
             PacketType::Warn => *warn_state = WarnStates::Warn,
@@ -112,90 +106,37 @@ fn update_state(warn_state: &mut WarnStates, text: &mut String, rx: &Receiver<Pa
     }
 }
 
-fn draw(wc: &WindowContext, warn_state: &WarnStates, text: &str) {
-    let mut dc = wc.init_drawing_context();
-    dc.clear_background(warn_state.get_color());
-
-    // let ascii_width = warn_state.get_ascii_art_width();
-    // let ascii_height = warn_state.get_ascii_art_height();
-
-    let font_size: i32 = 20;
+fn draw(warn_state: &WarnStates) -> io::Result<()> {
+    let ascii_width = warn_state.get_ascii_art_width();
+    let ascii_height = warn_state.get_ascii_art_height();
 
     let warn_text = warn_state.get_ascii_art();
-    let ascii_size = measure_text_ex(get_default_font(), warn_text, font_size as f32, 1.5);
 
-    let ascii_width = ascii_size.x as u32;
-    let ascii_height = ascii_size.y as u32;
+    let (cols, rows) = terminal::size()?;
 
-    let ascii_x = (get_screen_width() as u32 / 2) - (ascii_width / 2);
-    let ascii_y = (get_screen_height() as u32 / 2) - (ascii_height / 2);
+    let ascii_x = (cols / 2) - (ascii_width / 2) as u16;
+    let ascii_y = (rows / 2) - (ascii_height / 2) as u16;
+
+    let mut stdout = stdout();
 
     //Debug information in top left.
-    dc.draw_text(
-        &format!("ascii_x: {}", ascii_x),
-        0,
-        font_size * 1,
-        font_size,
-        colors::LIGHT_GRAY,
-    );
-    dc.draw_text(
-        &format!("ascii_y: {}", ascii_y),
-        0,
-        font_size * 2,
-        font_size,
-        colors::LIGHT_GRAY,
-    );
-    dc.draw_text(
-        &format!("mouse_x: {}", get_mouse_position().x),
-        0,
-        font_size * 3,
-        font_size,
-        colors::LIGHT_GRAY,
-    );
-    dc.draw_text(
-        &format!("mouse_y: {}", get_mouse_position().y),
-        0,
-        font_size * 4,
-        font_size,
-        colors::LIGHT_GRAY,
-    );
+    stdout.queue(cursor::MoveTo(0, 0))?
+        .queue(style::Print(format!("ascii_x: {}", ascii_x)))?.queue(cursor::MoveToNextLine(1))?
+        .queue(style::Print(format!("ascii_y: {}", ascii_y)))?.queue(cursor::MoveToNextLine(1))?
+        .queue(style::Print(format!("cols: {}", cols)))?.queue(cursor::MoveToNextLine(1))?
+        .queue(style::Print(format!("rows: {}", rows)))?.queue(cursor::MoveToNextLine(1))?;
 
-    dc.draw_text(
-        warn_state.get_ascii_art(),
-        ascii_x as i32,
-        ascii_y as i32,
-        20,
-        colors::LIGHT_GRAY,
-    );
+    stdout.queue(cursor::MoveTo(ascii_x, ascii_y))?;
+    let ascii_art = warn_state.get_ascii_art();
+    for line in ascii_art.lines() {
+        stdout.queue(style::Print(line))?
+            .queue(cursor::MoveDown(1))?
+            .queue(cursor::MoveToColumn(ascii_x))?;
+    }
 
-    dc.draw_text(&get_fps().to_string(), 0, 0, 20, colors::LIGHT_GRAY);
-    dc.draw_text(text, 200, 50, 20, colors::LIGHT_GRAY);
+    stdout.flush()?;
 
-    //Lines to help center things.
-    dc.draw_line_ex(
-        Vector2 {
-            x: get_screen_width() as f32 / 2.0,
-            y: 0.0,
-        },
-        Vector2 {
-            x: get_screen_width() as f32 / 2.0,
-            y: get_screen_height() as f32,
-        },
-        1.0,
-        colors::LIGHT_GRAY,
-    );
-    dc.draw_line_ex(
-        Vector2 {
-            x: 0.0,
-            y: get_screen_height() as f32 / 2.0,
-        },
-        Vector2 {
-            x: get_screen_width() as f32,
-            y: get_screen_height() as f32 / 2.0,
-        },
-        1.0,
-        colors::LIGHT_GRAY,
-    );
+    return Ok(());
 }
 
 use std::io::{Error, ErrorKind, Read, Write}; //Import the Read, Write traits for TcpStream.
@@ -317,7 +258,7 @@ struct Packet {
     text: Option<String>,
 }
 
-fn handle_packet(connection: &mut TcpStream, peer_addr: &str) -> Result<Packet, Error> {
+fn handle_packet(connection: &mut TcpStream, peer_addr: &str, mut log: Arc<File>) -> Result<Packet, Error> {
     //Read exactly one byte from the kernel's read queue. The first byte of every packet is the
     //length of the packet in total bytes. This prevents us from reading multiple packets from the
     //queue at once.
@@ -333,14 +274,11 @@ fn handle_packet(connection: &mut TcpStream, peer_addr: &str) -> Result<Packet, 
         }
     };
 
-    // println!("DEBUG: Received packet from {}.", peer_addr);
+    // writeln!(log, "DEBUG: Received packet from {}.", peer_addr);
 
     if num_bytes_read == 0 {
         //The other side has closed the connection; terminate the thread.
-        println!(
-            "INFO: Closed connection to {}: client disconnected.",
-            peer_addr
-        );
+        writeln!(log, "INFO: Closed connection to {peer_addr}: client disconnected.");
         return Err(Error::new(
             ErrorKind::Other,
             "Client closed the connection.",
@@ -354,17 +292,14 @@ fn handle_packet(connection: &mut TcpStream, peer_addr: &str) -> Result<Packet, 
         //Ill-formed packet! The client is sending junk! Close the connection.
         //Protocol does not handle single-byte packets.
         //num_bytes_in_packet will never exceed 256, as buf[0] is only a u8.
-        println!(
-            "INFO: Closed connection to {}: num_bytes_in_packet invalid, ({}).",
-            peer_addr, num_bytes_in_packet
-        );
+        writeln!(log, "INFO: Closed connection to {peer_addr}: num_bytes_in_packet invalid, ({num_bytes_in_packet}).");
         return Err(Error::new(
             ErrorKind::Other,
             "Invalid number of bytes declared by packet header.",
         ));
     }
 
-    // println!("DEBUG: Packet reports it is {} bytes long.", num_bytes_in_packet);
+    // writeln!(log, "DEBUG: Packet reports it is {} bytes long.", num_bytes_in_packet);
 
     //Good. We know how large the packet will be. Let's try to read the rest of it.
     let num_bytes_read = match connection.read(&mut buf[1..num_bytes_in_packet]) {
@@ -378,14 +313,19 @@ fn handle_packet(connection: &mut TcpStream, peer_addr: &str) -> Result<Packet, 
         }
     };
 
-    // println!("DEBUG: Successfully read {} more bytes of the packet.", num_bytes_read);
+    // writeln!(log, "DEBUG: Successfully read {} more bytes of the packet.", num_bytes_read);
 
     //                                 Plus one for the initial byte.
     //                                         v
     if num_bytes_in_packet != num_bytes_read + 1 {
         //TODO: Read may have been interrupted by a signal; try to get the rest of it.
         //For now, close the connection.
-        println!("INFO: Closed connection to {}: num_bytes_in_packet != total_num_bytes_read, ({} != {}).", peer_addr, num_bytes_in_packet, num_bytes_read + 1);
+        writeln!(log, 
+            "INFO: Closed connection to {}: num_bytes_in_packet != total_num_bytes_read, ({} != {}).",
+            peer_addr,
+            num_bytes_in_packet,
+            num_bytes_read + 1
+        );
         return Err(Error::new(
             ErrorKind::Other,
             "Num of bytes read does not match num of bytes declared in header by client.",
@@ -401,7 +341,7 @@ fn handle_packet(connection: &mut TcpStream, peer_addr: &str) -> Result<Packet, 
     //fields.
     if num_bytes_in_packet - 2 > 0 {
         packet_text = Some(String::from_utf8_lossy(&buf[2..num_bytes_in_packet]).to_string());
-        // println!("DEBUG: Received text: {} of {} bytes.", packet_text.clone().unwrap(), packet_text.clone().unwrap().len();
+        // writeln!(log, "DEBUG: Received text: {} of {} bytes.", packet_text.clone().unwrap(), packet_text.clone().unwrap().len();
     } else {
         packet_text = None;
     }
@@ -409,42 +349,36 @@ fn handle_packet(connection: &mut TcpStream, peer_addr: &str) -> Result<Packet, 
     match packet_type {
         PacketType::Info => {
             if packet_text == None {
-                println!(
-                    "INFO: Closed connection to {}: sent INFO packet without text.",
-                    peer_addr
-                );
+                writeln!(log, "INFO: Closed connection to {peer_addr}: sent INFO packet without text.");
                 return Err(Error::new(
                     ErrorKind::Other,
                     "Client sent INFO packet without text.",
                 ));
             }
-            print!("INFO: Received INFO packet from {}", peer_addr);
+            write!(log, "INFO: Received INFO packet from {peer_addr}");
         }
         PacketType::Warn => {
-            print!("INFO: Received WARN packet from {}", peer_addr);
+            write!(log, "INFO: Received WARN packet from {peer_addr}");
         }
         PacketType::Alert => {
-            print!("INFO: Received ALERT packet from {}", peer_addr);
+            write!(log, "INFO: Received ALERT packet from {peer_addr}");
         }
         PacketType::Name => {
             if packet_text == None {
-                println!(
-                    "INFO: Closed connection to {}: sent NAME packet without text",
-                    peer_addr
-                );
+                writeln!(log, "INFO: Closed connection to {peer_addr}: sent NAME packet without text.");
                 return Err(Error::new(
                     ErrorKind::Other,
                     "Client sent NAME packet without text.",
                 ));
             }
-            print!("INFO: Recieved NAME packet from {}", peer_addr);
+            eprint!("INFO: Recieved NAME packet from {peer_addr}");
         }
     }
 
     if packet_text.is_some() {
-        println!(" with text: \"{}\".", packet_text.as_deref().unwrap());
+        writeln!(log, " with text: \"{}\".", packet_text.as_deref().unwrap());
     } else {
-        println!(".");
+        writeln!(log, ".");
     }
 
     return Ok(Packet {
@@ -453,7 +387,7 @@ fn handle_packet(connection: &mut TcpStream, peer_addr: &str) -> Result<Packet, 
     });
 }
 
-fn handle_connection(mut connection: TcpStream, tx: Sender<Packet>) {
+fn handle_connection(mut connection: TcpStream, tx: Sender<Packet>, mut log: Arc<File>) {
     //connection_thread handles the particulars of each connection,
     //before sending out data through the channel to the main thread.
     let _connection_thread = thread::spawn(move || {
@@ -464,11 +398,11 @@ fn handle_connection(mut connection: TcpStream, tx: Sender<Packet>) {
             .peer_addr()
             .expect("Client is already connected.")
             .to_string();
-        println!("INFO: Received connection from {}.", peer_addr);
+        writeln!(log, "INFO: Received connection from {peer_addr}.");
 
         loop {
             //Read exactly one packet from kernel's internal buffer and return it.
-            let packet = match handle_packet(&mut connection, &peer_addr) {
+            let packet = match handle_packet(&mut connection, &peer_addr, Arc::clone(&log)) {
                 Ok(p) => Some(p),
                 Err(_) => None,
             };
@@ -509,14 +443,37 @@ fn handle_connection(mut connection: TcpStream, tx: Sender<Packet>) {
 
 // use std::env;
 
-fn main() {
+struct WindowContext {}
+
+impl WindowContext {
+    fn new() -> WindowContext {
+        terminal::enable_raw_mode().unwrap();
+        stdout().execute(terminal::EnterAlternateScreen);
+        stdout().execute(terminal::Clear(terminal::ClearType::All));
+        return WindowContext {};
+    }
+}
+
+impl Drop for WindowContext {
+    fn drop(&mut self) {
+        stdout().execute(terminal::LeaveAlternateScreen);
+    }
+}
+
+use std::fs::File;
+use std::sync::Arc;
+
+fn main() -> io::Result<()> {
     // env::set_var("RUST_BACKTRACE", "1");
     let mut warn_state = WarnStates::None;
-    let mut text = String::new();
+    let mut window_should_close = false;
+    let mut log = Arc::new(File::create("./warning_window.log")?);
 
-    let wc = init_window_context(800, 450, "warn_window");
+    //Init the window, clean up on drop.
+    let wc = WindowContext::new();
 
     let (tx, rx) = channel::<Packet>();
+    let mut _log = Arc::clone(&log);
 
     //The connection_manager thread lives as long as main.
     //It never exits, and continually handles incoming connections.
@@ -524,18 +481,53 @@ fn main() {
         let listener = TcpListener::bind("localhost:44444").unwrap();
 
         for connection in listener.incoming() {
+            let mut __log = Arc::clone(&_log);
             match connection {
-                Ok(c) => handle_connection(c, tx.clone()),
+                Ok(c) => handle_connection(c, tx.clone(), __log),
                 Err(e) => {
-                    eprintln!("ERROR: {}", e);
+                    writeln!(_log, "ERROR: {}", e);
                 }
             }
         }
     });
 
-    while !wc.window_should_close() {
-        update_state(&mut warn_state, &mut text, &rx);
+    while !window_should_close {
+        if poll(Duration::from_millis(500))? {
+            // It's guaranteed that the `read()` won't block when the `poll()`
+            // function returns `true`
+            match read()? {
+                Event::FocusGained => writeln!(log, "FocusGained")?,
+                Event::FocusLost => writeln!(log, "FocusLost")?,
+                Event::Key(event) => {
+                    if let KeyCode::Char(c) = event.code {
+                        if c == 'q' {
+                            window_should_close = true;
+                        }
+                        if c == 'c' && event.modifiers == KeyModifiers::CONTROL {
+                            window_should_close = true;
+                        }
+                    }
+                    if event.code == KeyCode::Esc {
+                        window_should_close = true;
+                    }
 
-        draw(&wc, &warn_state, &text);
+                    if let KeyCode::Char(c) = event.code {
+                        if c == 'r' {
+                            warn_state = WarnStates::None;
+                        }
+                    }
+
+                    writeln!(log, "{:?}", event);
+                },
+                Event::Resize(width, height) => writeln!(log, "New size {}x{}", width, height)?,
+                _ => (),
+            }
+        } else {
+            // Timeout expired and no `Event` is available
+            update_state(&mut warn_state, &mut window_should_close, &rx);
+            draw(&warn_state)?;
+        }
     }
+
+    return Ok(());
 }
