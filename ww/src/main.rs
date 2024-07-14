@@ -11,6 +11,7 @@ use crossterm::{
     queue,
 };
 
+#[derive(Copy, Clone, PartialEq)]
 enum WarnStates {
     None,
     Warn,
@@ -69,7 +70,7 @@ use std::net::{TcpListener, TcpStream};
 
 use std::sync::mpsc::Receiver;
 
-fn update_state(warn_state: &mut WarnStates, window_should_close: &mut bool, rx: &Receiver<Packet>) {
+fn update(state: &mut State, render_state: &mut RenderState, rx: &Receiver<Packet>) -> io::Result<()> {
     //We have a received a packet when packet is Some.
     //I initially went with a packet_received variable, but the borrow checker complained
     //about borrowing a variable that moved between loops *despite being assigned*.
@@ -86,32 +87,75 @@ fn update_state(warn_state: &mut WarnStates, window_should_close: &mut bool, rx:
         },
     }
 
-    // if is_key_pressed(Key::R) {
-    //     *warn_state = WarnStates::None;
-    // }
+    //Every 500 ms, we render. If a keypress is received, render immediately.
+    if poll(Duration::from_millis(500))? {
+        // It's guaranteed that the `read()` won't block when the `poll()`
+        // function returns `true`
+        match read()? {
+            Event::Key(event) => {
+                //[q]uit.
+                if let KeyCode::Char(c) = event.code {
+                    if c == 'q' {
+                        state.window_should_close = true;
+                    }
+                    if c == 'c' && event.modifiers == KeyModifiers::CONTROL {
+                        state.window_should_close = true;
+                    }
+                }
+                if event.code == KeyCode::Esc {
+                    state.window_should_close = true;
+                }
+
+                //Regular keybindings.
+                if let KeyCode::Char(c) = event.code {
+                    match c {
+                        //[r]eset warn state.
+                        'r' => {
+                            state.warn_state = WarnStates::None
+                        },
+                        //[f]ocus mode toggle.
+                        'f' => {
+                            state.is_focused_mode = !state.is_focused_mode;
+                            render_state.focused_mode_changed = true;
+                        },
+                        _ => (),
+                    }
+                }
+            },
+            // Event::Resize(width, height) => writeln!(log.lock().unwrap(), "New size {}x{}", width, height)?,
+            _ => (),
+        }
+    } else {
+        // Timeout expired and no `Event` is available
+    }
 
     if packet.is_some() {
         let packet = packet.unwrap();
         if packet.text.is_some() {
-            //WARN: text should be sanitized as adhocrays can't handle UTF8 with NULLs in the
+            //WARN: text should be sanitized as crossterm probably? can't handle UTF8 with NULLs in the
             //middle of a string.
             //*text = packet.text.unwrap();
         } else {
             // writeln!(log, "");
         }
         match packet.packet_type {
-            PacketType::Warn => *warn_state = WarnStates::Warn,
-            PacketType::Alert => *warn_state = WarnStates::Alert,
+            PacketType::Warn => {
+                if state.warn_state != WarnStates::Alert {
+                    state.warn_state = WarnStates::Warn
+                }
+            },
+            PacketType::Alert => state.warn_state = WarnStates::Alert,
             _ => (),
         };
     }
+
+    return Ok(());
 }
 
-fn draw(warn_state: &WarnStates) -> io::Result<()> {
+fn render(state: &State, render_state: &mut RenderState) -> io::Result<()> {
+    let warn_state = state.warn_state;
     let ascii_width = warn_state.get_ascii_art_width();
     let ascii_height = warn_state.get_ascii_art_height();
-
-    let warn_text = warn_state.get_ascii_art();
 
     let (cols, rows) = terminal::size()?;
 
@@ -142,6 +186,17 @@ fn draw(warn_state: &WarnStates) -> io::Result<()> {
         )?;
     }
     queue!(stdout, style::ResetColor)?;
+
+    if render_state.focused_mode_changed {
+        if state.is_focused_mode {
+            queue!(stdout, cursor::MoveTo(0, 5), style::Print("Focus!"))?;
+        }
+        else {
+            queue!(stdout, cursor::MoveTo(0, 5), style::Print("      "))?;
+        }
+
+        render_state.focused_mode_changed = false;
+    }
 
     stdout.flush()?;
 
@@ -267,7 +322,7 @@ struct Packet {
     text: Option<String>,
 }
 
-fn handle_packet(connection: &mut TcpStream, peer_addr: &str, mut log: Arc<Mutex<File>>) -> Result<Packet, Error> {
+fn handle_packet(connection: &mut TcpStream, peer_addr: &str, log: Arc<Mutex<File>>) -> Result<Packet, Error> {
     //Read exactly one byte from the kernel's read queue. The first byte of every packet is the
     //length of the packet in total bytes. This prevents us from reading multiple packets from the
     //queue at once.
@@ -287,7 +342,7 @@ fn handle_packet(connection: &mut TcpStream, peer_addr: &str, mut log: Arc<Mutex
 
     if num_bytes_read == 0 {
         //The other side has closed the connection; terminate the thread.
-        writeln!(log.lock().unwrap(), "INFO: Closed connection to {peer_addr}: client disconnected.");
+        writeln!(log.lock().unwrap(), "INFO: Closed connection to {peer_addr}: client disconnected.").unwrap();
         return Err(Error::new(
             ErrorKind::Other,
             "Client closed the connection.",
@@ -301,7 +356,7 @@ fn handle_packet(connection: &mut TcpStream, peer_addr: &str, mut log: Arc<Mutex
         //Ill-formed packet! The client is sending junk! Close the connection.
         //Protocol does not handle single-byte packets.
         //num_bytes_in_packet will never exceed 256, as buf[0] is only a u8.
-        writeln!(log.lock().unwrap(), "INFO: Closed connection to {peer_addr}: num_bytes_in_packet invalid, ({num_bytes_in_packet}).");
+        writeln!(log.lock().unwrap(), "INFO: Closed connection to {peer_addr}: num_bytes_in_packet invalid, ({num_bytes_in_packet}).").unwrap();
         return Err(Error::new(
             ErrorKind::Other,
             "Invalid number of bytes declared by packet header.",
@@ -334,7 +389,7 @@ fn handle_packet(connection: &mut TcpStream, peer_addr: &str, mut log: Arc<Mutex
             peer_addr,
             num_bytes_in_packet,
             num_bytes_read + 1
-        );
+        ).unwrap();
         return Err(Error::new(ErrorKind::Other, "Num of bytes read does not match num of bytes declared in header by client."));
     }
 
@@ -356,33 +411,33 @@ fn handle_packet(connection: &mut TcpStream, peer_addr: &str, mut log: Arc<Mutex
     match packet_type {
         PacketType::Info => {
             if packet_text == None {
-                writeln!(_log, "INFO: Closed connection to {peer_addr}: sent INFO packet without text.");
+                writeln!(_log, "INFO: Closed connection to {peer_addr}: sent INFO packet without text.").unwrap();
                 return Err(Error::new(ErrorKind::Other, "Client sent INFO packet without text."));
             }
-            write!(_log, "INFO: Received INFO packet from {peer_addr}");
+            write!(_log, "INFO: Received INFO packet from {peer_addr}").unwrap();
         }
         PacketType::Warn => {
-            write!(_log, "INFO: Received WARN packet from {peer_addr}");
+            write!(_log, "INFO: Received WARN packet from {peer_addr}").unwrap();
         }
         PacketType::Alert => {
-            write!(_log, "INFO: Received ALERT packet from {peer_addr}");
+            write!(_log, "INFO: Received ALERT packet from {peer_addr}").unwrap();
         }
         PacketType::Name => {
             if packet_text == None {
-                writeln!(_log, "INFO: Closed connection to {peer_addr}: sent NAME packet without text.");
+                writeln!(_log, "INFO: Closed connection to {peer_addr}: sent NAME packet without text.").unwrap();
                 return Err(Error::new(
                     ErrorKind::Other,
                     "Client sent NAME packet without text.",
                 ));
             }
-            write!(_log, "INFO: Recieved NAME packet from {peer_addr}");
+            write!(_log, "INFO: Recieved NAME packet from {peer_addr}").unwrap();
         }
     }
 
     if packet_text.is_some() {
-        writeln!(_log, " with text: \"{}\".", packet_text.as_deref().unwrap());
+        writeln!(_log, " with text: \"{}\".", packet_text.as_deref().unwrap()).unwrap();
     } else {
-        writeln!(_log, ".");
+        writeln!(_log, ".").unwrap();
     }
 
     return Ok(Packet {
@@ -391,7 +446,7 @@ fn handle_packet(connection: &mut TcpStream, peer_addr: &str, mut log: Arc<Mutex
     });
 }
 
-fn handle_connection(mut connection: TcpStream, tx: Sender<Packet>, mut log: Arc<Mutex<File>>) {
+fn handle_connection(mut connection: TcpStream, tx: Sender<Packet>, log: Arc<Mutex<File>>) {
     //connection_thread handles the particulars of each connection,
     //before sending out data through the channel to the main thread.
     let _connection_thread = thread::spawn(move || {
@@ -402,7 +457,7 @@ fn handle_connection(mut connection: TcpStream, tx: Sender<Packet>, mut log: Arc
             .peer_addr()
             .expect("Client is already connected.")
             .to_string();
-        writeln!(log.lock().unwrap(), "INFO: Received connection from {peer_addr}.");
+        writeln!(log.lock().unwrap(), "INFO: Received connection from {peer_addr}.").unwrap();
 
         loop {
             //Read exactly one packet from kernel's internal buffer and return it.
@@ -454,28 +509,57 @@ impl WindowContext {
         terminal::enable_raw_mode().unwrap();
         execute!(stdout(), terminal::EnterAlternateScreen).unwrap();
         execute!(stdout(), terminal::Clear(terminal::ClearType::All)).unwrap();
+        execute!(stdout(), cursor::Hide).unwrap();
         return WindowContext {};
     }
 }
 
 impl Drop for WindowContext {
     fn drop(&mut self) {
-        execute!(stdout(), terminal::LeaveAlternateScreen);
+        execute!(stdout(), terminal::LeaveAlternateScreen).unwrap();
+    }
+}
+
+struct State {
+    warn_state: WarnStates,
+    window_should_close: bool,
+    packet_log: VecDeque<Packet>,
+
+    is_focused_mode: bool,
+}
+
+struct RenderState {
+    focused_mode_changed: bool,
+}
+
+impl RenderState {
+    fn rerender_all() -> Self {
+        return RenderState {
+            focused_mode_changed: true,
+        };
     }
 }
 
 use std::fs::File;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::collections::VecDeque;
 
 fn main() -> io::Result<()> {
     // env::set_var("RUST_BACKTRACE", "1");
-    let mut warn_state = WarnStates::None;
-    let mut window_should_close = false;
-    let mut log = Arc::new(Mutex::new(File::create("./warning_window.log")?));
+    let mut state = State {
+        warn_state: WarnStates::None,
+        window_should_close: false,
+        packet_log: VecDeque::new(),
+
+        is_focused_mode: false,
+    };
+    let mut render_state = RenderState::rerender_all();
+
+    let log = Arc::new(Mutex::new(File::create("./warning_window.log")?));
 
     //Init the window, clean up on drop.
-    let wc = WindowContext::new();
+    let _wc = WindowContext::new();
 
     let (tx, rx) = channel::<Packet>();
     let mut _log = Arc::clone(&log);
@@ -490,48 +574,17 @@ fn main() -> io::Result<()> {
             match connection {
                 Ok(c) => handle_connection(c, tx.clone(), __log),
                 Err(e) => {
-                    writeln!(_log.lock().unwrap(), "ERROR: {}", e);
+                    writeln!(_log.lock().unwrap(), "ERROR: {}", e).unwrap();
                 }
             }
         }
     });
 
-    while !window_should_close {
-        if poll(Duration::from_millis(500))? {
-            // It's guaranteed that the `read()` won't block when the `poll()`
-            // function returns `true`
-            match read()? {
-                Event::FocusGained => writeln!(log.lock().unwrap(), "FocusGained")?,
-                Event::FocusLost => writeln!(log.lock().unwrap(), "FocusLost")?,
-                Event::Key(event) => {
-                    if let KeyCode::Char(c) = event.code {
-                        if c == 'q' {
-                            window_should_close = true;
-                        }
-                        if c == 'c' && event.modifiers == KeyModifiers::CONTROL {
-                            window_should_close = true;
-                        }
-                    }
-                    if event.code == KeyCode::Esc {
-                        window_should_close = true;
-                    }
-
-                    if let KeyCode::Char(c) = event.code {
-                        if c == 'r' {
-                            warn_state = WarnStates::None;
-                        }
-                    }
-
-                    writeln!(log.lock().unwrap(), "{:?}", event);
-                },
-                Event::Resize(width, height) => writeln!(log.lock().unwrap(), "New size {}x{}", width, height)?,
-                _ => (),
-            }
-        } else {
-            // Timeout expired and no `Event` is available
-            update_state(&mut warn_state, &mut window_should_close, &rx);
-            draw(&warn_state)?;
-        }
+    while !state.window_should_close {
+        //update() will poll for keypresses -- if there are none it continues after 500 ms.
+        update(&mut state, &mut render_state, &rx)?;
+        //Always render -- after 500 ms or when a key is pressed.
+        render(&state, &mut render_state)?;
     }
 
     return Ok(());
