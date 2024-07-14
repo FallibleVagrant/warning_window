@@ -144,10 +144,14 @@ fn update(state: &mut State, render_state: &mut RenderState, rx: &Receiver<Packe
         match packet.packet_type {
             PacketType::Warn => {
                 if state.warn_state != WarnStates::Alert {
-                    state.warn_state = WarnStates::Warn
+                    state.warn_state = WarnStates::Warn;
+                    render_state.warn_state_changed = true;
                 }
             },
-            PacketType::Alert => state.warn_state = WarnStates::Alert,
+            PacketType::Alert => {
+                state.warn_state = WarnStates::Alert;
+                render_state.warn_state_changed = true;
+            },
             _ => (),
         };
     }
