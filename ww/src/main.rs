@@ -130,7 +130,8 @@ fn draw(warn_state: &WarnStates) -> io::Result<()> {
         style::Print(format!("rows: {}", rows)), cursor::MoveToNextLine(1),
     )?;
 
-    queue!(stdout, cursor::MoveTo(ascii_x, ascii_y))?;
+    //Print the ascii art.
+    queue!(stdout, cursor::MoveTo(ascii_x, ascii_y), style::SetBackgroundColor(warn_state.get_color()))?;
     let ascii_art = warn_state.get_ascii_art();
     for line in ascii_art.lines() {
         queue!(
@@ -140,6 +141,7 @@ fn draw(warn_state: &WarnStates) -> io::Result<()> {
             cursor::MoveToColumn(ascii_x),
         )?;
     }
+    queue!(stdout, style::ResetColor)?;
 
     stdout.flush()?;
 
@@ -265,7 +267,7 @@ struct Packet {
     text: Option<String>,
 }
 
-fn handle_packet(connection: &mut TcpStream, peer_addr: &str, mut log: Arc<File>) -> Result<Packet, Error> {
+fn handle_packet(connection: &mut TcpStream, peer_addr: &str, mut log: Arc<Mutex<File>>) -> Result<Packet, Error> {
     //Read exactly one byte from the kernel's read queue. The first byte of every packet is the
     //length of the packet in total bytes. This prevents us from reading multiple packets from the
     //queue at once.
@@ -285,7 +287,7 @@ fn handle_packet(connection: &mut TcpStream, peer_addr: &str, mut log: Arc<File>
 
     if num_bytes_read == 0 {
         //The other side has closed the connection; terminate the thread.
-        writeln!(log, "INFO: Closed connection to {peer_addr}: client disconnected.");
+        writeln!(log.lock().unwrap(), "INFO: Closed connection to {peer_addr}: client disconnected.");
         return Err(Error::new(
             ErrorKind::Other,
             "Client closed the connection.",
@@ -299,7 +301,7 @@ fn handle_packet(connection: &mut TcpStream, peer_addr: &str, mut log: Arc<File>
         //Ill-formed packet! The client is sending junk! Close the connection.
         //Protocol does not handle single-byte packets.
         //num_bytes_in_packet will never exceed 256, as buf[0] is only a u8.
-        writeln!(log, "INFO: Closed connection to {peer_addr}: num_bytes_in_packet invalid, ({num_bytes_in_packet}).");
+        writeln!(log.lock().unwrap(), "INFO: Closed connection to {peer_addr}: num_bytes_in_packet invalid, ({num_bytes_in_packet}).");
         return Err(Error::new(
             ErrorKind::Other,
             "Invalid number of bytes declared by packet header.",
@@ -327,16 +329,13 @@ fn handle_packet(connection: &mut TcpStream, peer_addr: &str, mut log: Arc<File>
     if num_bytes_in_packet != num_bytes_read + 1 {
         //TODO: Read may have been interrupted by a signal; try to get the rest of it.
         //For now, close the connection.
-        writeln!(log, 
+        writeln!(log.lock().unwrap(),
             "INFO: Closed connection to {}: num_bytes_in_packet != total_num_bytes_read, ({} != {}).",
             peer_addr,
             num_bytes_in_packet,
             num_bytes_read + 1
         );
-        return Err(Error::new(
-            ErrorKind::Other,
-            "Num of bytes read does not match num of bytes declared in header by client.",
-        ));
+        return Err(Error::new(ErrorKind::Other, "Num of bytes read does not match num of bytes declared in header by client."));
     }
 
     let packet_type_number = buf[1];
@@ -353,39 +352,37 @@ fn handle_packet(connection: &mut TcpStream, peer_addr: &str, mut log: Arc<File>
         packet_text = None;
     }
 
+    let mut _log = log.lock().unwrap();
     match packet_type {
         PacketType::Info => {
             if packet_text == None {
-                writeln!(log, "INFO: Closed connection to {peer_addr}: sent INFO packet without text.");
-                return Err(Error::new(
-                    ErrorKind::Other,
-                    "Client sent INFO packet without text.",
-                ));
+                writeln!(_log, "INFO: Closed connection to {peer_addr}: sent INFO packet without text.");
+                return Err(Error::new(ErrorKind::Other, "Client sent INFO packet without text."));
             }
-            write!(log, "INFO: Received INFO packet from {peer_addr}");
+            write!(_log, "INFO: Received INFO packet from {peer_addr}");
         }
         PacketType::Warn => {
-            write!(log, "INFO: Received WARN packet from {peer_addr}");
+            write!(_log, "INFO: Received WARN packet from {peer_addr}");
         }
         PacketType::Alert => {
-            write!(log, "INFO: Received ALERT packet from {peer_addr}");
+            write!(_log, "INFO: Received ALERT packet from {peer_addr}");
         }
         PacketType::Name => {
             if packet_text == None {
-                writeln!(log, "INFO: Closed connection to {peer_addr}: sent NAME packet without text.");
+                writeln!(_log, "INFO: Closed connection to {peer_addr}: sent NAME packet without text.");
                 return Err(Error::new(
                     ErrorKind::Other,
                     "Client sent NAME packet without text.",
                 ));
             }
-            eprint!("INFO: Recieved NAME packet from {peer_addr}");
+            write!(_log, "INFO: Recieved NAME packet from {peer_addr}");
         }
     }
 
     if packet_text.is_some() {
-        writeln!(log, " with text: \"{}\".", packet_text.as_deref().unwrap());
+        writeln!(_log, " with text: \"{}\".", packet_text.as_deref().unwrap());
     } else {
-        writeln!(log, ".");
+        writeln!(_log, ".");
     }
 
     return Ok(Packet {
@@ -394,7 +391,7 @@ fn handle_packet(connection: &mut TcpStream, peer_addr: &str, mut log: Arc<File>
     });
 }
 
-fn handle_connection(mut connection: TcpStream, tx: Sender<Packet>, mut log: Arc<File>) {
+fn handle_connection(mut connection: TcpStream, tx: Sender<Packet>, mut log: Arc<Mutex<File>>) {
     //connection_thread handles the particulars of each connection,
     //before sending out data through the channel to the main thread.
     let _connection_thread = thread::spawn(move || {
@@ -405,7 +402,7 @@ fn handle_connection(mut connection: TcpStream, tx: Sender<Packet>, mut log: Arc
             .peer_addr()
             .expect("Client is already connected.")
             .to_string();
-        writeln!(log, "INFO: Received connection from {peer_addr}.");
+        writeln!(log.lock().unwrap(), "INFO: Received connection from {peer_addr}.");
 
         loop {
             //Read exactly one packet from kernel's internal buffer and return it.
@@ -469,12 +466,13 @@ impl Drop for WindowContext {
 
 use std::fs::File;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 fn main() -> io::Result<()> {
     // env::set_var("RUST_BACKTRACE", "1");
     let mut warn_state = WarnStates::None;
     let mut window_should_close = false;
-    let mut log = Arc::new(File::create("./warning_window.log")?);
+    let mut log = Arc::new(Mutex::new(File::create("./warning_window.log")?));
 
     //Init the window, clean up on drop.
     let wc = WindowContext::new();
@@ -492,7 +490,7 @@ fn main() -> io::Result<()> {
             match connection {
                 Ok(c) => handle_connection(c, tx.clone(), __log),
                 Err(e) => {
-                    writeln!(_log, "ERROR: {}", e);
+                    writeln!(_log.lock().unwrap(), "ERROR: {}", e);
                 }
             }
         }
@@ -503,8 +501,8 @@ fn main() -> io::Result<()> {
             // It's guaranteed that the `read()` won't block when the `poll()`
             // function returns `true`
             match read()? {
-                Event::FocusGained => writeln!(log, "FocusGained")?,
-                Event::FocusLost => writeln!(log, "FocusLost")?,
+                Event::FocusGained => writeln!(log.lock().unwrap(), "FocusGained")?,
+                Event::FocusLost => writeln!(log.lock().unwrap(), "FocusLost")?,
                 Event::Key(event) => {
                     if let KeyCode::Char(c) = event.code {
                         if c == 'q' {
@@ -524,9 +522,9 @@ fn main() -> io::Result<()> {
                         }
                     }
 
-                    writeln!(log, "{:?}", event);
+                    writeln!(log.lock().unwrap(), "{:?}", event);
                 },
-                Event::Resize(width, height) => writeln!(log, "New size {}x{}", width, height)?,
+                Event::Resize(width, height) => writeln!(log.lock().unwrap(), "New size {}x{}", width, height)?,
                 _ => (),
             }
         } else {
