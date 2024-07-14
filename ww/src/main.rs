@@ -122,7 +122,10 @@ fn update(state: &mut State, render_state: &mut RenderState, rx: &Receiver<Packe
                     }
                 }
             },
-            // Event::Resize(width, height) => writeln!(log.lock().unwrap(), "New size {}x{}", width, height)?,
+            Event::Resize(_width, _height) => {
+                // writeln!(log.lock().unwrap(), "New size {}x{}", width, height)?
+                *render_state = RenderState::rerender_all();
+            },
             _ => (),
         }
     } else {
@@ -152,8 +155,8 @@ fn update(state: &mut State, render_state: &mut RenderState, rx: &Receiver<Packe
     return Ok(());
 }
 
-fn render(state: &State, render_state: &mut RenderState) -> io::Result<()> {
-    let warn_state = state.warn_state;
+fn render_warn_state(warn_state: WarnStates) -> io::Result<()> {
+    let mut stdout = stdout();
     let ascii_width = warn_state.get_ascii_art_width();
     let ascii_height = warn_state.get_ascii_art_height();
 
@@ -162,19 +165,6 @@ fn render(state: &State, render_state: &mut RenderState) -> io::Result<()> {
     let ascii_x = (cols / 2) - (ascii_width / 2) as u16;
     let ascii_y = (rows / 2) - (ascii_height / 2) as u16;
 
-    let mut stdout = stdout();
-
-    //Debug information in top left.
-    queue!(
-        stdout,
-        cursor::MoveTo(0, 0),
-        style::Print(format!("ascii_x: {}", ascii_x)), cursor::MoveToNextLine(1),
-        style::Print(format!("ascii_y: {}", ascii_y)), cursor::MoveToNextLine(1),
-        style::Print(format!("cols: {}", cols)), cursor::MoveToNextLine(1),
-        style::Print(format!("rows: {}", rows)), cursor::MoveToNextLine(1),
-    )?;
-
-    //Print the ascii art.
     queue!(stdout, cursor::MoveTo(ascii_x, ascii_y), style::SetBackgroundColor(warn_state.get_color()))?;
     let ascii_art = warn_state.get_ascii_art();
     for line in ascii_art.lines() {
@@ -187,6 +177,34 @@ fn render(state: &State, render_state: &mut RenderState) -> io::Result<()> {
     }
     queue!(stdout, style::ResetColor)?;
 
+    return Ok(());
+}
+
+fn render(state: &State, render_state: &mut RenderState) -> io::Result<()> {
+    let mut stdout = stdout();
+
+    if render_state.clear_background {
+        queue!(
+            stdout,
+            terminal::Clear(terminal::ClearType::All),
+        )?;
+    }
+
+    //Debug information in top left.
+    queue!(
+        stdout,
+        cursor::MoveTo(0, 0),
+        // style::Print(format!("ascii_x: {}", ascii_x)), cursor::MoveToNextLine(1),
+        // style::Print(format!("ascii_y: {}", ascii_y)), cursor::MoveToNextLine(1),
+        // style::Print(format!("cols: {}", cols)), cursor::MoveToNextLine(1),
+        // style::Print(format!("rows: {}", rows)), cursor::MoveToNextLine(1),
+    )?;
+
+    //Print the ascii art representing the warn state.
+    if render_state.warn_state_changed {
+        render_warn_state(state.warn_state)?;
+    }
+
     if render_state.focused_mode_changed {
         if state.is_focused_mode {
             queue!(stdout, cursor::MoveTo(0, 5), style::Print("Focus!"))?;
@@ -194,11 +212,14 @@ fn render(state: &State, render_state: &mut RenderState) -> io::Result<()> {
         else {
             queue!(stdout, cursor::MoveTo(0, 5), style::Print("      "))?;
         }
-
-        render_state.focused_mode_changed = false;
     }
 
     stdout.flush()?;
+
+    //It is implicit that render() will deal with every field in render_state if true,
+    //so to avoid manually tracking that we have dealt with everything, we simply create
+    //a new render_state where everything is false.
+    *render_state = RenderState::new();
 
     return Ok(());
 }
@@ -530,12 +551,26 @@ struct State {
 
 struct RenderState {
     focused_mode_changed: bool,
+    warn_state_changed: bool,
+
+    //For when everything needs to be rerendered e.g. on resize.
+    clear_background: bool,
 }
 
 impl RenderState {
+    fn new() -> Self {
+        return RenderState {
+            focused_mode_changed: false,
+            warn_state_changed: false,
+            clear_background: false,
+        };
+    }
+
     fn rerender_all() -> Self {
         return RenderState {
             focused_mode_changed: true,
+            warn_state_changed: true,
+            clear_background: true,
         };
     }
 }
