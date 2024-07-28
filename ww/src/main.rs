@@ -19,29 +19,6 @@ enum WarnStates {
 }
 
 impl WarnStates {
-    fn get_ascii_art(&self) -> &str {
-        match self {
-            Self::None => concat!(
-                "  / \\  \n",
-                "       \n",
-                "  \\ /  \n",
-            ),
-            Self::Warn => concat!(
-                "       \n",
-                "       \n",
-                "   O   \n",
-                "  /|\\  \n",
-                "       \n",
-            ),
-            Self::Alert => concat!(
-                "   .   \n",
-                "  / \\  \n",
-                " / ! \\ \n",
-                "+-----+\n",
-            ),
-        }
-    }
-
     fn get_ascii_art_width(&self) -> u32 {
         return 7;
     }
@@ -53,12 +30,144 @@ impl WarnStates {
             Self::Alert => 4,
         }
     }
+}
 
-    fn get_color(&self) -> Color {
-        match self {
-            Self::None => Color::Rgb { r: 24, g: 24, b: 24, },
-            Self::Warn => Color::Rgb { r: 244, g: 131, b: 37, }, //Also try #FF9F43.
-            Self::Alert => Color::Rgb { r: 179, g: 0, b: 0, },
+struct WarnStateAsciiArt {
+    info_art: String,
+    warn_art: String,
+    alert_art: String,
+
+    info_color: style::Color,
+    warn_color: style::Color,
+    alert_color: style::Color,
+}
+
+impl WarnStateAsciiArt {
+    fn new() -> Self {
+        return WarnStateAsciiArt {
+            info_art: concat!(
+                "  / \\  \n",
+                "       \n",
+                "  \\ /  \n",
+            ).to_string(),
+            warn_art: concat!(
+                "       \n",
+                "       \n",
+                "   O   \n",
+                "  /|\\  \n",
+                "       \n",
+            ).to_string(),
+            alert_art: concat!(
+                "   .   \n",
+                "  / \\  \n",
+                " / ! \\ \n",
+                "+-----+\n",
+            ).to_string(),
+
+            info_color: Color::Rgb { r: 24, g: 24, b: 24, },
+            warn_color: Color::Rgb { r: 244, g: 131, b: 37, }, //Also try #FF9F43.
+            alert_color: Color::Rgb { r: 179, g: 0, b: 0, },
+        };
+    }
+
+    fn build(info_art: &str, warn_art: &str, alert_art: &str) -> Self {
+        return WarnStateAsciiArt {
+            info_art: info_art.to_string(),
+            warn_art: warn_art.to_string(),
+            alert_art: alert_art.to_string(),
+
+            info_color: Color::Rgb { r: 24, g: 24, b: 24, },
+            warn_color: Color::Rgb { r: 244, g: 131, b: 37, }, //Also try #FF9F43.
+            alert_color: Color::Rgb { r: 179, g: 0, b: 0, },
+        };
+    }
+
+    fn build_with_color(info_art: &str, warn_art: &str, alert_art: &str, info_color: style::Color, warn_color: style::Color, alert_color: style::Color) -> Self {
+        return WarnStateAsciiArt {
+            info_art: info_art.to_string(),
+            warn_art: warn_art.to_string(),
+            alert_art: alert_art.to_string(),
+
+            info_color,
+            warn_color,
+            alert_color,
+        };
+    }
+
+    fn to_ascii_art(&self, warn_state: &WarnStates) -> &str {
+        return match warn_state {
+            WarnStates::None => &self.info_art,
+            WarnStates::Warn => &self.warn_art,
+            WarnStates::Alert => &self.alert_art,
+        };
+    }
+
+    fn width(&self, warn_state: &WarnStates) -> usize {
+        match warn_state {
+            WarnStates::None => {
+                //These return the index of the first \n, or the len().
+                return self.info_art.char_indices()                 //     ignore this, just for returning a tuple.
+                                    .find(|c| { c.1 == '\n' })      //     v
+                                    .unwrap_or_else(|| (self.info_art.len(), 'i')).0;
+            },
+            WarnStates::Warn => {
+                return self.warn_art.char_indices()
+                                    .find(|c| { c.1 == '\n' })
+                                    .unwrap_or_else(|| (self.warn_art.len(), 'i')).0;
+            },
+            WarnStates::Alert => {
+                return self.alert_art.char_indices()
+                                    .find(|c| { c.1 == '\n' })
+                                    .unwrap_or_else(|| (self.alert_art.len(), 'i')).0;
+            },
+        };
+    }
+
+    fn height(&self, warn_state: &WarnStates) -> usize {
+        match warn_state {
+            WarnStates::None => {
+                return self.info_art.lines().count();
+            },
+            WarnStates::Warn => {
+                return self.warn_art.lines().count();
+            },
+            WarnStates::Alert => {
+                return self.alert_art.lines().count();
+            },
+        }
+    }
+
+    fn max_width(&self) -> usize {
+        return std::cmp::max(
+            self.width(&WarnStates::None),
+            std::cmp::max(
+                self.width(&WarnStates::Warn),
+                self.width(&WarnStates::Alert)
+            )
+        );
+    }
+
+    fn max_height(&self) -> usize {
+        return std::cmp::max(
+            self.height(&WarnStates::None),
+            std::cmp::max(
+                self.height(&WarnStates::Warn),
+                self.height(&WarnStates::Alert)
+            )
+        );
+    }
+
+    fn color(&self, warn_state: &WarnStates) -> Color {
+        match warn_state {
+            WarnStates::None => {
+                return self.info_color;
+            },
+            WarnStates::Warn => {
+                return self.warn_color;
+            },
+            WarnStates::Alert => {
+                return self.alert_color;
+            },
         }
     }
 }
@@ -70,7 +179,7 @@ use std::net::{TcpListener, TcpStream};
 
 use std::sync::mpsc::Receiver;
 
-fn update(state: &mut State, render_state: &mut RenderState, rx: &Receiver<Packet>) -> io::Result<()> {
+fn update(state: &mut State, render_state: &mut RenderState, rx: &Receiver<Packet>, log: Arc<Mutex<File>>) -> io::Result<()> {
     //We have a received a packet when packet is Some.
     //I initially went with a packet_received variable, but the borrow checker complained
     //about borrowing a variable that moved between loops *despite being assigned*.
@@ -134,6 +243,7 @@ fn update(state: &mut State, render_state: &mut RenderState, rx: &Receiver<Packe
 
     if packet.is_some() {
         let packet = packet.unwrap();
+        state.packet_log.push_front(packet.clone());
         if packet.text.is_some() {
             //WARN: text should be sanitized as crossterm probably? can't handle UTF8 with NULLs in the
             //middle of a string.
@@ -159,18 +269,26 @@ fn update(state: &mut State, render_state: &mut RenderState, rx: &Receiver<Packe
     return Ok(());
 }
 
-fn render_warn_state(warn_state: WarnStates) -> io::Result<()> {
+fn render_warn_state(warn_art: &WarnStateAsciiArt, warn_state: &WarnStates, is_centered: bool) -> io::Result<()> {
     let mut stdout = stdout();
-    let ascii_width = warn_state.get_ascii_art_width();
-    let ascii_height = warn_state.get_ascii_art_height();
+    let ascii_width = warn_art.width(warn_state);
+    let ascii_height = warn_art.height(warn_state);
 
     let (cols, rows) = terminal::size()?;
 
-    let ascii_x = (cols / 2) - (ascii_width / 2) as u16;
-    let ascii_y = (rows / 2) - (ascii_height / 2) as u16;
+    let ascii_x;
+    let ascii_y;
+    if is_centered {
+        ascii_x = (cols / 2) - (ascii_width / 2) as u16;
+        ascii_y = (rows / 2) - (ascii_height / 2) as u16;
+    }
+    else {
+        ascii_x = (cols / 2) - (ascii_width / 2) as u16;
+        ascii_y = rows / 5;
+    }
 
-    queue!(stdout, cursor::MoveTo(ascii_x, ascii_y), style::SetBackgroundColor(warn_state.get_color()))?;
-    let ascii_art = warn_state.get_ascii_art();
+    queue!(stdout, cursor::MoveTo(ascii_x, ascii_y), style::SetBackgroundColor(warn_art.color(warn_state)))?;
+    let ascii_art = warn_art.to_ascii_art(warn_state);
     for line in ascii_art.lines() {
         queue!(
             stdout,
@@ -184,8 +302,48 @@ fn render_warn_state(warn_state: WarnStates) -> io::Result<()> {
     return Ok(());
 }
 
-fn render(state: &State, render_state: &mut RenderState) -> io::Result<()> {
+fn render_packet_log(packet_log: &VecDeque<Packet>) -> io::Result<()> {
     let mut stdout = stdout();
+
+    let (cols, rows) = terminal::size()?;
+
+    let ascii_x = (cols / 2) - 10 as u16;
+    let ascii_y = 2 * rows / 5;
+
+    // println!("packet_log len: {}", packet_log.len());
+    queue!(stdout, cursor::MoveTo(ascii_x, ascii_y))?;
+    for packet in packet_log {
+        match packet.packet_type {
+            PacketType::Info => queue!(stdout, style::Print("INFO | "))?,
+            PacketType::Warn => queue!(stdout, style::Print("WARN | "))?,
+            PacketType::Alert => queue!(stdout, style::Print("ALERT | "))?,
+            PacketType::Name => queue!(stdout, style::Print("NAME | "))?,
+        }
+        queue!(
+            stdout,
+            style::Print(packet.text.as_ref().unwrap_or(&"".to_string())),
+            cursor::MoveDown(1),
+            cursor::MoveToColumn(ascii_x),
+        )?;
+    }
+    queue!(stdout, style::ResetColor)?;
+
+    return Ok(());
+}
+
+fn render(state: &State, render_state: &mut RenderState, log: Arc<Mutex<File>>) -> io::Result<()> {
+    let mut stdout = stdout();
+
+    let (cols, rows) = terminal::size()?;
+    let min_cols = state.warn_state.get_ascii_art_width() as u16 + 10;
+    let min_rows = state.warn_state.get_ascii_art_height() as u16 + 10;
+    if cols < min_cols || rows < min_rows {
+        writeln!(log.lock().unwrap(), "ERROR: ascii art is too large to render on terminal.").unwrap();
+        return Err(Error::new(
+            ErrorKind::Other,
+            "ERROR: ascii art is too large to render on terminal.",
+        ));
+    }
 
     if render_state.clear_background {
         queue!(
@@ -206,7 +364,7 @@ fn render(state: &State, render_state: &mut RenderState) -> io::Result<()> {
 
     //Print the ascii art representing the warn state.
     if render_state.warn_state_changed {
-        render_warn_state(state.warn_state)?;
+        render_warn_state(&state.warn_state_ascii_art, &state.warn_state, false)?;
     }
 
     if render_state.focused_mode_changed {
@@ -217,6 +375,8 @@ fn render(state: &State, render_state: &mut RenderState) -> io::Result<()> {
             queue!(stdout, cursor::MoveTo(0, 5), style::Print("      "))?;
         }
     }
+
+    render_packet_log(&state.packet_log)?;
 
     stdout.flush()?;
 
@@ -312,7 +472,7 @@ fn handle_association(connection: &mut TcpStream) -> Result<(), Error> {
     return Ok(());
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 enum PacketType {
     Info,
     Warn,
@@ -341,7 +501,7 @@ impl PacketType {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Packet {
     packet_type: PacketType,
     text: Option<String>,
@@ -547,6 +707,7 @@ impl Drop for WindowContext {
 
 struct State {
     warn_state: WarnStates,
+    warn_state_ascii_art: WarnStateAsciiArt,
     window_should_close: bool,
     packet_log: VecDeque<Packet>,
 
@@ -557,7 +718,7 @@ struct RenderState {
     focused_mode_changed: bool,
     warn_state_changed: bool,
 
-    //For when everything needs to be rerendered e.g. on resize.
+    //For when everything needs to be re-rendered e.g. on resize.
     clear_background: bool,
 }
 
@@ -566,6 +727,7 @@ impl RenderState {
         return RenderState {
             focused_mode_changed: false,
             warn_state_changed: false,
+
             clear_background: false,
         };
     }
@@ -574,6 +736,7 @@ impl RenderState {
         return RenderState {
             focused_mode_changed: true,
             warn_state_changed: true,
+
             clear_background: true,
         };
     }
@@ -588,6 +751,7 @@ fn main() -> io::Result<()> {
     // env::set_var("RUST_BACKTRACE", "1");
     let mut state = State {
         warn_state: WarnStates::None,
+        warn_state_ascii_art: WarnStateAsciiArt::new(),
         window_should_close: false,
         packet_log: VecDeque::new(),
 
@@ -621,9 +785,9 @@ fn main() -> io::Result<()> {
 
     while !state.window_should_close {
         //update() will poll for keypresses -- if there are none it continues after 500 ms.
-        update(&mut state, &mut render_state, &rx)?;
+        update(&mut state, &mut render_state, &rx, Arc::clone(&log))?;
         //Always render -- after 500 ms or when a key is pressed.
-        render(&state, &mut render_state)?;
+        render(&state, &mut render_state, Arc::clone(&log))?;
     }
 
     return Ok(());
