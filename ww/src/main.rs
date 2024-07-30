@@ -175,18 +175,18 @@ impl WarnStateAsciiArt {
 use std::sync::mpsc::{channel, TryRecvError};
 use std::thread;
 
-use std::net::{TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream, IpAddr, SocketAddr};
 
 use std::sync::mpsc::Receiver;
 
-fn update(state: &mut State, render_state: &mut RenderState, rx: &Receiver<Packet>, log: Arc<Mutex<File>>) -> io::Result<()> {
+fn update(state: &mut State, render_state: &mut RenderState, rx: &Receiver<LogItem>, log: Arc<Mutex<File>>) -> io::Result<()> {
     //We have a received a packet when packet is Some.
     //I initially went with a packet_received variable, but the borrow checker complained
     //about borrowing a variable that moved between loops *despite being assigned*.
-    let mut packet: Option<Packet> = None;
+    let mut log_item: Option<LogItem> = None;
     match rx.try_recv() {
-        Ok(p) => {
-            packet = Some(p);
+        Ok(l) => {
+            log_item = Some(l);
         }
         Err(e) => match e {
             TryRecvError::Empty => (),
@@ -241,9 +241,10 @@ fn update(state: &mut State, render_state: &mut RenderState, rx: &Receiver<Packe
         // Timeout expired and no `Event` is available
     }
 
-    if packet.is_some() {
-        let packet = packet.unwrap();
-        state.packet_log.push_front(packet.clone());
+    if log_item.is_some() {
+        let log_item = log_item.unwrap();
+        let packet: &Packet = &log_item.packet;
+
         if packet.text.is_some() {
             //WARN: text should be sanitized as crossterm probably? can't handle UTF8 with NULLs in the
             //middle of a string.
@@ -251,6 +252,7 @@ fn update(state: &mut State, render_state: &mut RenderState, rx: &Receiver<Packe
         } else {
             // writeln!(log, "");
         }
+
         match packet.packet_type {
             PacketType::Warn => {
                 if state.warn_state != WarnStates::Alert {
@@ -264,6 +266,8 @@ fn update(state: &mut State, render_state: &mut RenderState, rx: &Receiver<Packe
             },
             _ => (),
         };
+
+        state.packet_log.push_front(log_item);
     }
 
     return Ok(());
@@ -302,26 +306,35 @@ fn render_warn_state(warn_art: &WarnStateAsciiArt, warn_state: &WarnStates, is_c
     return Ok(());
 }
 
-fn render_packet_log(packet_log: &VecDeque<Packet>) -> io::Result<()> {
+fn render_packet_log(packet_log: &VecDeque<LogItem>) -> io::Result<()> {
     let mut stdout = stdout();
 
     let (cols, rows) = terminal::size()?;
 
-    let ascii_x = (cols / 2) - 10 as u16;
+    let ascii_x = 10 as u16;
     let ascii_y = 2 * rows / 5;
 
     // println!("packet_log len: {}", packet_log.len());
     queue!(stdout, cursor::MoveTo(ascii_x, ascii_y))?;
-    for packet in packet_log {
-        match packet.packet_type {
-            PacketType::Info => queue!(stdout, style::Print("INFO | "))?,
-            PacketType::Warn => queue!(stdout, style::Print("WARN | "))?,
-            PacketType::Alert => queue!(stdout, style::Print("ALERT | "))?,
-            PacketType::Name => queue!(stdout, style::Print("NAME | "))?,
-        }
+    for log_item in packet_log {
+        let timestamp_in_secs = log_item.timestamp.duration_since(UNIX_EPOCH).expect("Time went backwards.").as_secs();
+
+        let secs_per_day  =  24 * 60 * 60;
+        let secs_per_hour =  60 * 60;
+        let secs_per_min  =  60;
+
+        let hour = (timestamp_in_secs % secs_per_day) / secs_per_hour;
+        let min = (timestamp_in_secs % secs_per_hour) / secs_per_min;
+
+        queue!(stdout,
+            style::Print(
+                format!("[{:0>2}:{:0>2}] {} | ", hour, min, log_item.packet.packet_type.to_string())
+            )
+        )?;
+
         queue!(
             stdout,
-            style::Print(packet.text.as_ref().unwrap_or(&"".to_string())),
+            style::Print(log_item.packet.text.as_ref().unwrap_or(&"".to_string())),
             cursor::MoveDown(1),
             cursor::MoveToColumn(ascii_x),
         )?;
@@ -499,6 +512,15 @@ impl PacketType {
             PacketType::Name => 5,
         }
     }
+
+    fn to_string(&self) -> &str {
+        match self {
+            PacketType::Info => "INFO",
+            PacketType::Warn => "WARN",
+            PacketType::Alert => "ALERT",
+            PacketType::Name => "NAME",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -631,7 +653,7 @@ fn handle_packet(connection: &mut TcpStream, peer_addr: &str, log: Arc<Mutex<Fil
     });
 }
 
-fn handle_connection(mut connection: TcpStream, tx: Sender<Packet>, log: Arc<Mutex<File>>) {
+fn handle_connection(mut connection: TcpStream, tx: Sender<LogItem>, log: Arc<Mutex<File>>) {
     //connection_thread handles the particulars of each connection,
     //before sending out data through the channel to the main thread.
     let _connection_thread = thread::spawn(move || {
@@ -640,20 +662,26 @@ fn handle_connection(mut connection: TcpStream, tx: Sender<Packet>, log: Arc<Mut
 
         let peer_addr = connection
             .peer_addr()
-            .expect("Client is already connected.")
-            .to_string();
-        writeln!(log.lock().unwrap(), "INFO: Received connection from {peer_addr}.").unwrap();
+            .expect("Client is already connected.");
+        let peer_addr_str = peer_addr.to_string();
+        writeln!(log.lock().unwrap(), "INFO: Received connection from {peer_addr_str}.").unwrap();
 
         loop {
             //Read exactly one packet from kernel's internal buffer and return it.
-            let packet = match handle_packet(&mut connection, &peer_addr, Arc::clone(&log)) {
+            let packet = match handle_packet(&mut connection, &peer_addr_str, Arc::clone(&log)) {
                 Ok(p) => Some(p),
                 Err(_) => None,
             };
 
             //Send structured data from packet to main thread.
             if packet.is_some() {
-                tx.send(packet.unwrap()).expect("Unable to send on channel");
+                let log_item = LogItem {
+                    timestamp: SystemTime::now(),
+                    peer_addr: peer_addr,
+                    packet: packet.unwrap()
+                };
+
+                tx.send(log_item).expect("Unable to send on channel.");
             } else {
                 return;
             }
@@ -705,11 +733,19 @@ impl Drop for WindowContext {
     }
 }
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
+struct LogItem {
+    timestamp: SystemTime,
+    peer_addr: SocketAddr,
+    packet: Packet,
+}
+
 struct State {
     warn_state: WarnStates,
     warn_state_ascii_art: WarnStateAsciiArt,
     window_should_close: bool,
-    packet_log: VecDeque<Packet>,
+    packet_log: VecDeque<LogItem>,
 
     is_focused_mode: bool,
 }
@@ -764,7 +800,7 @@ fn main() -> io::Result<()> {
     //Init the window, clean up on drop.
     let _wc = WindowContext::new();
 
-    let (tx, rx) = channel::<Packet>();
+    let (tx, rx) = channel::<LogItem>();
     let mut _log = Arc::clone(&log);
 
     //The connection_manager thread lives as long as main.
