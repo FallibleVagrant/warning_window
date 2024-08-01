@@ -273,6 +273,87 @@ fn update(state: &mut State, render_state: &mut RenderState, rx: &Receiver<LogIt
     return Ok(());
 }
 
+fn get_rand_char(rand: usize) -> char {
+    return match rand {
+        0 => '#',
+        1 => '&',
+        2 => '+',
+        3 => '=',
+        4 => '*',
+        5 => '-',
+        _ => ' ',
+    };
+}
+
+fn render_alert_border(frame_number: usize) -> io::Result<()> {
+    let mut stdout = stdout();
+    let (cols, rows) = terminal::size()?;
+
+    //Blank out the border every frame.
+    for y in 1..rows {
+        let xs: [u16; 6] = [0, 1, 2, cols-3, cols-2, cols-1];
+        for x in xs {
+            queue!(stdout, cursor::MoveTo(x, y), style::Print(' '))?;
+        }
+    }
+
+    for y in 1..rows {
+        let i = y as usize;
+
+        //Print the streams of characters that appear on the left.
+        if true {
+            let mut c = get_rand_char((frame_number - i) % 11);
+            if (frame_number - i) % 143 <= 80 {
+                queue!(stdout, cursor::MoveTo(0, y), style::Print(c))?;
+            }
+            c = get_rand_char((frame_number - i) % 9);
+            if (frame_number - i) % 223 <= 100 {
+                queue!(stdout, cursor::MoveTo(1, y), style::Print(c))?;
+            }
+            c = get_rand_char((frame_number - i) % 7);
+            if (frame_number - i) % 349 <= 180 {
+                queue!(stdout, cursor::MoveTo(2, y), style::Print(c))?;
+            }
+            c = get_rand_char((frame_number - i) % 12);
+            if (frame_number - i) % 943 <= 200 {
+                queue!(stdout, cursor::MoveTo(3, y), style::Print(c))?;
+            }
+        }
+
+        //Print the streams of characters that appear on the right.
+        if true {
+            let mut c = get_rand_char((frame_number - i) % 11);
+            if (frame_number - i) % 139 <= 90 {
+                queue!(stdout, cursor::MoveTo(cols, y), style::Print(c))?;
+            }
+            c = get_rand_char((frame_number - i) % 9);
+            if (frame_number - i) % 226 <= 130 {
+                queue!(stdout, cursor::MoveTo(cols - 1, y), style::Print(c))?;
+            }
+            c = get_rand_char((frame_number - i) % 7);
+            if (frame_number - i) % 363 <= 200 {
+                queue!(stdout, cursor::MoveTo(cols - 2, y), style::Print(c))?;
+            }
+            c = get_rand_char((frame_number - i) % 12);
+            if (frame_number - i) % 927 <= 200 {
+                queue!(stdout, cursor::MoveTo(cols - 3, y), style::Print(c))?;
+            }
+        }
+
+        //Print the bordering '|' characters on the left and right.
+        if (frame_number + i) % 6 < 3 {
+            queue!(stdout, cursor::MoveTo(0, y), style::Print("|"))?;
+            queue!(stdout, cursor::MoveTo(cols, y), style::Print("|"))?;
+        }
+        if frame_number % 13 + i % 5 <= 3 {
+            queue!(stdout, cursor::MoveTo(0, y), style::Print(":"))?;
+            queue!(stdout, cursor::MoveTo(cols, y), style::Print(":"))?;
+        }
+    }
+    return Ok(());
+
+}
+
 fn render_warn_state(warn_art: &WarnStateAsciiArt, warn_state: &WarnStates, is_centered: bool) -> io::Result<()> {
     let mut stdout = stdout();
     let ascii_width = warn_art.width(warn_state);
@@ -344,7 +425,7 @@ fn render_packet_log(packet_log: &VecDeque<LogItem>) -> io::Result<()> {
     return Ok(());
 }
 
-fn render(state: &State, render_state: &mut RenderState, log: Arc<Mutex<File>>) -> io::Result<()> {
+fn render(state: &State, render_state: &mut RenderState, log: Arc<Mutex<File>>, frame_number: usize) -> io::Result<()> {
     let mut stdout = stdout();
 
     let (cols, rows) = terminal::size()?;
@@ -378,6 +459,11 @@ fn render(state: &State, render_state: &mut RenderState, log: Arc<Mutex<File>>) 
     //Print the ascii art representing the warn state.
     if render_state.warn_state_changed {
         render_warn_state(&state.warn_state_ascii_art, &state.warn_state, false)?;
+    }
+
+    //Print the border art when alert.
+    if state.warn_state == WarnStates::Alert {
+        render_alert_border(frame_number);
     }
 
     if render_state.focused_mode_changed {
@@ -786,7 +872,7 @@ use std::collections::VecDeque;
 fn main() -> io::Result<()> {
     // env::set_var("RUST_BACKTRACE", "1");
     let mut state = State {
-        warn_state: WarnStates::None,
+        warn_state: WarnStates::Alert,
         warn_state_ascii_art: WarnStateAsciiArt::new(),
         window_should_close: false,
         packet_log: VecDeque::new(),
@@ -794,6 +880,7 @@ fn main() -> io::Result<()> {
         is_focused_mode: false,
     };
     let mut render_state = RenderState::rerender_all();
+    let mut frame_number: usize = 36041;
 
     let log = Arc::new(Mutex::new(File::create("./warning_window.log")?));
 
@@ -823,7 +910,8 @@ fn main() -> io::Result<()> {
         //update() will poll for keypresses -- if there are none it continues after 500 ms.
         update(&mut state, &mut render_state, &rx, Arc::clone(&log))?;
         //Always render -- after 500 ms or when a key is pressed.
-        render(&state, &mut render_state, Arc::clone(&log))?;
+        render(&state, &mut render_state, Arc::clone(&log), frame_number)?;
+        frame_number += 1;
     }
 
     return Ok(());
