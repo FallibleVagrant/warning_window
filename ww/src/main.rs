@@ -277,6 +277,7 @@ fn update(state: &mut State, render_state: &mut RenderState, rx: &Receiver<LogIt
         };
 
         state.packet_log.push_front(log_item);
+        render_state.packet_log_changed = true;
     }
 
     return Ok(());
@@ -395,11 +396,13 @@ fn render_warn_state(warn_art: &WarnStateAsciiArt, warn_state: &WarnStates, is_c
     }
 
     //Blank the previous warn_state.
+    //These max_glitch variables actually denote the max + 1 due to being used in a modulo.
+    //Apologies for any confusion this may cause.
     let max_horizontal_glitch: u16 = 4;
     let max_vertical_glitch: u16 = 3;
     queue!(stdout, cursor::MoveTo(ascii_min_x - max_horizontal_glitch, ascii_min_y - max_vertical_glitch))?;
-    for _y in 0..(warn_art.max_height() + (2 * max_vertical_glitch) as usize) {
-        for _x in 0..(warn_art.max_width() + (2 * max_horizontal_glitch) as usize) {
+    for _y in 0..(warn_art.max_height() + (2 * max_vertical_glitch) as usize - 1) {
+        for _x in 0..(warn_art.max_width() + (2 * max_horizontal_glitch) as usize - 1) {
             queue!(stdout, style::Print(' '))?;
         }
         queue!(stdout, cursor::MoveDown(1), cursor::MoveToColumn(ascii_min_x - max_horizontal_glitch))?;
@@ -455,7 +458,7 @@ fn render_packet_log(packet_log: &VecDeque<LogItem>, warn_art_max_height: usize)
     //Blank the packet log.
     queue!(stdout, cursor::MoveTo(ascii_x, ascii_y))?;
     for _y in ascii_y..=(rows - 3) {
-        for _x in margin_x..(cols - margin_x) {
+        for _x in margin_x..=(cols - margin_x) {
             queue!(stdout, style::Print(' '))?;
         }
         queue!(stdout, cursor::MoveDown(1), cursor::MoveToColumn(ascii_x))?;
@@ -489,10 +492,11 @@ fn render_packet_log(packet_log: &VecDeque<LogItem>, warn_art_max_height: usize)
 
         //Print the message text.
         let default = "".to_string();
-        let msg = log_item.packet.text.as_ref().unwrap_or(&default);
-        for (_, c) in msg.char_indices() {
-            if cursor::position().unwrap().0 > cols - margin_x {
-                if cursor::position().unwrap().1 > rows - 4 {
+        let msg = log_item.packet.text.as_ref().unwrap_or(&default).as_str();
+        let (mut x, mut y) = cursor::position().unwrap();
+        for c in msg.chars() {
+            if x >= cols - margin_x {
+                if y > rows - 4 {
                     break;
                 }
                 queue!(
@@ -500,17 +504,21 @@ fn render_packet_log(packet_log: &VecDeque<LogItem>, warn_art_max_height: usize)
                     cursor::MoveDown(1),
                     cursor::MoveToColumn(ascii_x),
                 )?;
+                x = ascii_x;
+                y += 1;
             }
             queue!(stdout, style::Print(c))?;
+            x += 1;
         }
         queue!(
             stdout,
             cursor::MoveDown(1),
             cursor::MoveToColumn(ascii_x),
         )?;
+        y += 1;
 
         //Stop near the bottom of the screen.
-        if cursor::position().unwrap().1 > rows - 3 {
+        if y > rows - 3 {
             break;
         }
     }
@@ -570,7 +578,9 @@ fn render(state: &State, render_state: &mut RenderState, log: Arc<Mutex<File>>, 
         }
     }
 
-    render_packet_log(&state.packet_log, state.warn_state_ascii_art.max_height())?;
+    if render_state.packet_log_changed {
+        render_packet_log(&state.packet_log, state.warn_state_ascii_art.max_height())?;
+    }
 
     stdout.flush()?;
 
@@ -936,6 +946,7 @@ struct State {
 struct RenderState {
     focused_mode_changed: bool,
     warn_state_changed: bool,
+    packet_log_changed: bool,
 
     //For when everything needs to be re-rendered e.g. on resize.
     clear_background: bool,
@@ -946,6 +957,7 @@ impl RenderState {
         return RenderState {
             focused_mode_changed: false,
             warn_state_changed: false,
+            packet_log_changed: false,
 
             clear_background: false,
         };
@@ -955,6 +967,7 @@ impl RenderState {
         return RenderState {
             focused_mode_changed: true,
             warn_state_changed: true,
+            packet_log_changed: true,
 
             clear_background: true,
         };
