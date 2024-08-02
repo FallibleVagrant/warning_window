@@ -30,6 +30,14 @@ impl WarnStates {
             Self::Alert => 4,
         }
     }
+
+    fn to_string(&self) -> &str {
+        match self {
+            Self::None => "NONE",
+            Self::Warn => "WARN",
+            Self::Alert => "ALERT",
+        }
+    }
 }
 
 struct WarnStateAsciiArt {
@@ -220,7 +228,8 @@ fn update(state: &mut State, render_state: &mut RenderState, rx: &Receiver<LogIt
                     match c {
                         //[r]eset warn state.
                         'r' => {
-                            state.warn_state = WarnStates::None
+                            state.warn_state = WarnStates::None;
+                            render_state.warn_state_changed = true;
                         },
                         //[f]ocus mode toggle.
                         'f' => {
@@ -290,14 +299,14 @@ fn render_alert_border(frame_number: usize) -> io::Result<()> {
     let (cols, rows) = terminal::size()?;
 
     //Blank out the border every frame.
-    for y in 1..rows {
+    for y in 0..rows {
         let xs: [u16; 6] = [0, 1, 2, cols-3, cols-2, cols-1];
         for x in xs {
             queue!(stdout, cursor::MoveTo(x, y), style::Print(' '))?;
         }
     }
 
-    for y in 1..rows {
+    for y in 0..rows {
         let i = y as usize;
 
         //Print the streams of characters that appear on the left.
@@ -350,8 +359,8 @@ fn render_alert_border(frame_number: usize) -> io::Result<()> {
             queue!(stdout, cursor::MoveTo(cols, y), style::Print(":"))?;
         }
     }
-    return Ok(());
 
+    return Ok(());
 }
 
 fn render_warn_state(warn_art: &WarnStateAsciiArt, warn_state: &WarnStates, is_centered: bool) -> io::Result<()> {
@@ -372,6 +381,27 @@ fn render_warn_state(warn_art: &WarnStateAsciiArt, warn_state: &WarnStates, is_c
         ascii_y = rows / 5;
     }
 
+    let ascii_min_x;
+    let ascii_min_y;
+    if is_centered {
+        ascii_min_x = (cols / 2) - (warn_art.max_width() / 2) as u16;
+        ascii_min_y = (rows / 2) - (warn_art.max_height() / 2) as u16;
+    }
+    else {
+        ascii_min_x = (cols / 2) - (warn_art.max_width() / 2) as u16;
+        ascii_min_y = rows / 5;
+    }
+
+    //Blank the previous warn_state.
+    queue!(stdout, cursor::MoveTo(ascii_min_x, ascii_min_y))?;
+    for y in 0..warn_art.max_height() {
+        for x in 0..warn_art.max_width() {
+            queue!(stdout, style::Print(' '))?;
+        }
+        queue!(stdout, cursor::MoveDown(1), cursor::MoveToColumn(ascii_min_x))?;
+    }
+
+    //Print the current warn_state.
     queue!(stdout, cursor::MoveTo(ascii_x, ascii_y), style::SetBackgroundColor(warn_art.color(warn_state)))?;
     let ascii_art = warn_art.to_ascii_art(warn_state);
     for line in ascii_art.lines() {
@@ -463,7 +493,20 @@ fn render(state: &State, render_state: &mut RenderState, log: Arc<Mutex<File>>, 
 
     //Print the border art when alert.
     if state.warn_state == WarnStates::Alert {
-        render_alert_border(frame_number);
+        render_alert_border(frame_number)?;
+    }
+    else {
+        //Blank out the border if we have changed away from alert state.
+        //Unfortunately, this code also triggers when switching from NONE to WARN.
+        if render_state.warn_state_changed {
+            //Blank out the border.
+            for y in 0..rows {
+                let xs: [u16; 6] = [0, 1, 2, cols-3, cols-2, cols-1];
+                for x in xs {
+                    queue!(stdout, cursor::MoveTo(x, y), style::Print(' '))?;
+                }
+            }
+        }
     }
 
     if render_state.focused_mode_changed {
@@ -872,7 +915,7 @@ use std::collections::VecDeque;
 fn main() -> io::Result<()> {
     // env::set_var("RUST_BACKTRACE", "1");
     let mut state = State {
-        warn_state: WarnStates::Alert,
+        warn_state: WarnStates::None,
         warn_state_ascii_art: WarnStateAsciiArt::new(),
         window_should_close: false,
         packet_log: VecDeque::new(),
