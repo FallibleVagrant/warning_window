@@ -294,18 +294,19 @@ fn get_rand_char(rand: usize) -> char {
     };
 }
 
-fn render_alert_border(frame_number: usize) -> io::Result<()> {
+fn render_alert_border(frame_number: usize, warn_art: &WarnStateAsciiArt) -> io::Result<()> {
     let mut stdout = stdout();
     let (cols, rows) = terminal::size()?;
 
     //Blank out the border every frame.
     for y in 0..rows {
-        let xs: [u16; 6] = [0, 1, 2, cols-3, cols-2, cols-1];
+        let xs: [u16; 8] = [0, 1, 2, 3, cols-4, cols-3, cols-2, cols-1];
         for x in xs {
             queue!(stdout, cursor::MoveTo(x, y), style::Print(' '))?;
         }
     }
 
+    // queue!(stdout, style::SetForegroundColor(warn_art.color(&WarnStates::Alert)))?;
     for y in 0..rows {
         let i = y as usize;
 
@@ -359,11 +360,12 @@ fn render_alert_border(frame_number: usize) -> io::Result<()> {
             queue!(stdout, cursor::MoveTo(cols, y), style::Print(":"))?;
         }
     }
+    // queue!(stdout, style::ResetColor)?;
 
     return Ok(());
 }
 
-fn render_warn_state(warn_art: &WarnStateAsciiArt, warn_state: &WarnStates, is_centered: bool) -> io::Result<()> {
+fn render_warn_state(warn_art: &WarnStateAsciiArt, warn_state: &WarnStates, is_centered: bool, frame_number: usize) -> io::Result<()> {
     let mut stdout = stdout();
     let ascii_width = warn_art.width(warn_state);
     let ascii_height = warn_art.height(warn_state);
@@ -393,37 +395,71 @@ fn render_warn_state(warn_art: &WarnStateAsciiArt, warn_state: &WarnStates, is_c
     }
 
     //Blank the previous warn_state.
-    queue!(stdout, cursor::MoveTo(ascii_min_x, ascii_min_y))?;
-    for y in 0..warn_art.max_height() {
-        for x in 0..warn_art.max_width() {
+    let max_horizontal_glitch: u16 = 4;
+    let max_vertical_glitch: u16 = 3;
+    queue!(stdout, cursor::MoveTo(ascii_min_x - max_horizontal_glitch, ascii_min_y - max_vertical_glitch))?;
+    for _y in 0..(warn_art.max_height() + (2 * max_vertical_glitch) as usize) {
+        for _x in 0..(warn_art.max_width() + (2 * max_horizontal_glitch) as usize) {
             queue!(stdout, style::Print(' '))?;
         }
-        queue!(stdout, cursor::MoveDown(1), cursor::MoveToColumn(ascii_min_x))?;
+        queue!(stdout, cursor::MoveDown(1), cursor::MoveToColumn(ascii_min_x - max_horizontal_glitch))?;
     }
+    let max_horizontal_glitch: usize = max_horizontal_glitch as usize;
+    let max_vertical_glitch: usize = max_vertical_glitch as usize;
 
     //Print the current warn_state.
     queue!(stdout, cursor::MoveTo(ascii_x, ascii_y), style::SetBackgroundColor(warn_art.color(warn_state)))?;
     let ascii_art = warn_art.to_ascii_art(warn_state);
-    for line in ascii_art.lines() {
-        queue!(
-            stdout,
-            style::Print(line),
-            cursor::MoveDown(1),
-            cursor::MoveToColumn(ascii_x),
-        )?;
+    for (i, line) in ascii_art.lines().enumerate() {
+        //Compute the horizontal and vertical shift applied to the frame every so often.
+        let mut horizontal_glitch: i32 = 0;
+        if (frame_number + ((i << 3) % 5)) % 284 <= 37 {
+            horizontal_glitch = ((((frame_number + i) << 3) % 213) % max_horizontal_glitch) as i32;
+            if ((frame_number << 4) + ((i << 5) % 23)) % 2 == 0 {
+                horizontal_glitch *= -1;
+            }
+        }
+        let mut vertical_glitch: i32 = 0;
+        if (frame_number + ((i << 2) % 7)) % 361 <= 25 {
+            vertical_glitch = ((((frame_number + i) << 3) % 213) % max_vertical_glitch) as i32;
+            if ((frame_number << 5) + ((i << 4) % 49)) % 2 == 0 {
+                vertical_glitch *= -1;
+            }
+        }
+        let x = ascii_x as i32 + horizontal_glitch;
+        let y = ascii_y as i32 + i as i32 + vertical_glitch;
+        queue!(stdout, cursor::MoveTo(x as u16, y as u16), style::Print(line))?;
+
+        //Original code to print without glitching.
+        // queue!(
+        //     stdout,
+        //     style::Print(line),
+        //     cursor::MoveDown(1),
+        //     cursor::MoveToColumn(ascii_x),
+        // )?;
     }
     queue!(stdout, style::ResetColor)?;
 
     return Ok(());
 }
 
-fn render_packet_log(packet_log: &VecDeque<LogItem>) -> io::Result<()> {
+fn render_packet_log(packet_log: &VecDeque<LogItem>, warn_art_max_height: usize) -> io::Result<()> {
     let mut stdout = stdout();
 
     let (cols, rows) = terminal::size()?;
 
-    let ascii_x = 10 as u16;
-    let ascii_y = 2 * rows / 5;
+    let margin_x = 4;
+    let ascii_x = margin_x as u16;
+    let ascii_y = 2 + warn_art_max_height as u16 + rows / 5;
+
+    //Blank the packet log.
+    queue!(stdout, cursor::MoveTo(ascii_x, ascii_y))?;
+    for _y in ascii_y..=(rows - 3) {
+        for _x in margin_x..(cols - margin_x) {
+            queue!(stdout, style::Print(' '))?;
+        }
+        queue!(stdout, cursor::MoveDown(1), cursor::MoveToColumn(ascii_x))?;
+    }
 
     // println!("packet_log len: {}", packet_log.len());
     queue!(stdout, cursor::MoveTo(ascii_x, ascii_y))?;
@@ -437,18 +473,46 @@ fn render_packet_log(packet_log: &VecDeque<LogItem>) -> io::Result<()> {
         let hour = (timestamp_in_secs % secs_per_day) / secs_per_hour;
         let min = (timestamp_in_secs % secs_per_hour) / secs_per_min;
 
+        //Print the time and packet type.
         queue!(stdout,
             style::Print(
                 format!("[{:0>2}:{:0>2}] {} | ", hour, min, log_item.packet.packet_type.to_string())
             )
         )?;
 
+        //Print the peer address.
+        queue!(stdout,
+            style::Print(
+                format!("{} | ", log_item.peer_addr.to_string())
+            )
+        )?;
+
+        //Print the message text.
+        let default = "".to_string();
+        let msg = log_item.packet.text.as_ref().unwrap_or(&default);
+        for (_, c) in msg.char_indices() {
+            if cursor::position().unwrap().0 > cols - margin_x {
+                if cursor::position().unwrap().1 > rows - 4 {
+                    break;
+                }
+                queue!(
+                    stdout,
+                    cursor::MoveDown(1),
+                    cursor::MoveToColumn(ascii_x),
+                )?;
+            }
+            queue!(stdout, style::Print(c))?;
+        }
         queue!(
             stdout,
-            style::Print(log_item.packet.text.as_ref().unwrap_or(&"".to_string())),
             cursor::MoveDown(1),
             cursor::MoveToColumn(ascii_x),
         )?;
+
+        //Stop near the bottom of the screen.
+        if cursor::position().unwrap().1 > rows - 3 {
+            break;
+        }
     }
     queue!(stdout, style::ResetColor)?;
 
@@ -476,24 +540,12 @@ fn render(state: &State, render_state: &mut RenderState, log: Arc<Mutex<File>>, 
         )?;
     }
 
-    //Debug information in top left.
-    queue!(
-        stdout,
-        cursor::MoveTo(0, 0),
-        // style::Print(format!("ascii_x: {}", ascii_x)), cursor::MoveToNextLine(1),
-        // style::Print(format!("ascii_y: {}", ascii_y)), cursor::MoveToNextLine(1),
-        // style::Print(format!("cols: {}", cols)), cursor::MoveToNextLine(1),
-        // style::Print(format!("rows: {}", rows)), cursor::MoveToNextLine(1),
-    )?;
-
     //Print the ascii art representing the warn state.
-    if render_state.warn_state_changed {
-        render_warn_state(&state.warn_state_ascii_art, &state.warn_state, false)?;
-    }
+    render_warn_state(&state.warn_state_ascii_art, &state.warn_state, false, frame_number)?;
 
     //Print the border art when alert.
     if state.warn_state == WarnStates::Alert {
-        render_alert_border(frame_number)?;
+        render_alert_border(frame_number, &state.warn_state_ascii_art)?;
     }
     else {
         //Blank out the border if we have changed away from alert state.
@@ -501,7 +553,7 @@ fn render(state: &State, render_state: &mut RenderState, log: Arc<Mutex<File>>, 
         if render_state.warn_state_changed {
             //Blank out the border.
             for y in 0..rows {
-                let xs: [u16; 6] = [0, 1, 2, cols-3, cols-2, cols-1];
+                let xs: [u16; 8] = [0, 1, 2, 3, cols-4, cols-3, cols-2, cols-1];
                 for x in xs {
                     queue!(stdout, cursor::MoveTo(x, y), style::Print(' '))?;
                 }
@@ -518,7 +570,7 @@ fn render(state: &State, render_state: &mut RenderState, log: Arc<Mutex<File>>, 
         }
     }
 
-    render_packet_log(&state.packet_log)?;
+    render_packet_log(&state.packet_log, state.warn_state_ascii_art.max_height())?;
 
     stdout.flush()?;
 
@@ -858,7 +910,9 @@ impl WindowContext {
 
 impl Drop for WindowContext {
     fn drop(&mut self) {
+        terminal::disable_raw_mode().unwrap();
         execute!(stdout(), terminal::LeaveAlternateScreen).unwrap();
+        execute!(stdout(), cursor::Show).unwrap();
     }
 }
 
