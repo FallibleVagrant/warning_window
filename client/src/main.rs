@@ -126,8 +126,10 @@ fn main() {
                 err_msg = "ERR: INFO messages must be non-zero.".to_string();
             }
             else {
-                session.send_info(&msg);
-                err_msg = "Sent!".to_string();
+                match session.send_info(&msg) {
+                    Ok(_) => err_msg = "Sent!".to_string(),
+                    Err(e) => err_msg = format!("ERR: {}", e),
+                }
             }
         }
 
@@ -137,8 +139,10 @@ fn main() {
         let x = middle_width - (w / 2);
         let y = middle_height - (h / 2) + offset;
         if button(&mut dc, x, y, w, h, "WARN", Color { r: 244, g: 131, b: 37, a: 255 }) {
-            session.send_warn(&msg);
-            err_msg = "Sent!".to_string();
+            match session.send_warn(&msg) {
+                Ok(_) => err_msg = "Sent!".to_string(),
+                Err(e) => err_msg = format!("ERR: {}", e),
+            }
         }
 
         let w = 150;
@@ -147,8 +151,10 @@ fn main() {
         let x = middle_width - (w / 2);
         let y = middle_height - (h / 2) + offset;
         if button(&mut dc, x, y, w, h, "ALERT", Color { r: 179, g: 0, b: 0, a: 255 }) {
-            session.send_alert(&msg);
-            err_msg = "Sent!".to_string();
+            match session.send_alert(&msg) {
+                Ok(_) => err_msg = "Sent!".to_string(),
+                Err(e) => err_msg = format!("ERR: {}", e),
+            }
         }
     }
 }
