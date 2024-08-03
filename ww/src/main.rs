@@ -188,7 +188,8 @@ use std::net::{TcpListener, TcpStream, IpAddr, SocketAddr};
 use std::sync::mpsc::Receiver;
 
 fn update(state: &mut State, render_state: &mut RenderState, rx: &Receiver<LogItem>, log: Arc<Mutex<File>>) -> io::Result<()> {
-    //We have a received a packet when packet is Some.
+    //We have a received a packet when log_item is Some, or otherwise a connection notification
+    //from the connecting/disconnecting client.
     //I initially went with a packet_received variable, but the borrow checker complained
     //about borrowing a variable that moved between loops *despite being assigned*.
     let mut log_item: Option<LogItem> = None;
@@ -252,29 +253,25 @@ fn update(state: &mut State, render_state: &mut RenderState, rx: &Receiver<LogIt
 
     if log_item.is_some() {
         let log_item = log_item.unwrap();
-        let packet: &Packet = &log_item.packet;
 
-        if packet.text.is_some() {
-            //WARN: text should be sanitized as crossterm probably? can't handle UTF8 with NULLs in the
-            //middle of a string.
-            //*text = packet.text.unwrap();
-        } else {
-            // writeln!(log, "");
-        }
-
-        match packet.packet_type {
-            PacketType::Warn => {
-                if state.warn_state != WarnStates::Alert {
-                    state.warn_state = WarnStates::Warn;
-                    render_state.warn_state_changed = true;
-                }
-            },
-            PacketType::Alert => {
-                state.warn_state = WarnStates::Alert;
-                render_state.warn_state_changed = true;
+        match &log_item {
+            LogItem::PacketLogItem { packet, .. } => {
+                match packet.packet_type {
+                    PacketType::Warn => {
+                        if state.warn_state != WarnStates::Alert {
+                            state.warn_state = WarnStates::Warn;
+                            render_state.warn_state_changed = true;
+                        }
+                    },
+                    PacketType::Alert => {
+                        state.warn_state = WarnStates::Alert;
+                        render_state.warn_state_changed = true;
+                    },
+                    _ => (),
+                };
             },
             _ => (),
-        };
+        }
 
         state.packet_log.push_front(log_item);
         render_state.packet_log_changed = true;
@@ -452,22 +449,22 @@ fn render_packet_log(packet_log: &VecDeque<LogItem>, warn_art_max_height: usize)
     let (cols, rows) = terminal::size()?;
 
     let margin_x = 4;
-    let ascii_x = margin_x as u16;
-    let ascii_y = 2 + warn_art_max_height as u16 + rows / 5;
+    let start_x = margin_x as u16;
+    let start_y = 2 + warn_art_max_height as u16 + rows / 5;
 
     //Blank the packet log.
-    queue!(stdout, cursor::MoveTo(ascii_x, ascii_y))?;
-    for _y in ascii_y..=(rows - 3) {
+    queue!(stdout, cursor::MoveTo(start_x, start_y))?;
+    for _y in start_y..=(rows - 3) {
         for _x in margin_x..=(cols - margin_x) {
             queue!(stdout, style::Print(' '))?;
         }
-        queue!(stdout, cursor::MoveDown(1), cursor::MoveToColumn(ascii_x))?;
+        queue!(stdout, cursor::MoveDown(1), cursor::MoveToColumn(start_x))?;
     }
 
     // println!("packet_log len: {}", packet_log.len());
-    queue!(stdout, cursor::MoveTo(ascii_x, ascii_y))?;
+    queue!(stdout, cursor::MoveTo(start_x, start_y))?;
     for log_item in packet_log {
-        let timestamp_in_secs = log_item.timestamp.duration_since(UNIX_EPOCH).expect("Time went backwards.").as_secs();
+        let timestamp_in_secs = log_item.timestamp().duration_since(UNIX_EPOCH).expect("Time went backwards.").as_secs();
 
         let secs_per_day  =  24 * 60 * 60;
         let secs_per_hour =  60 * 60;
@@ -476,46 +473,89 @@ fn render_packet_log(packet_log: &VecDeque<LogItem>, warn_art_max_height: usize)
         let hour = (timestamp_in_secs % secs_per_day) / secs_per_hour;
         let min = (timestamp_in_secs % secs_per_hour) / secs_per_min;
 
-        //Print the time and packet type.
+        //Print the time.
         queue!(stdout,
             style::Print(
-                format!("[{:0>2}:{:0>2}] {} | ", hour, min, log_item.packet.packet_type.to_string())
+                format!("[{:0>2}:{:0>2}] ", hour, min)
             )
         )?;
 
-        //Print the peer address.
-        queue!(stdout,
-            style::Print(
-                format!("{} | ", log_item.peer_addr.to_string())
-            )
-        )?;
+        let mut y;
 
-        //Print the message text.
-        let default = "".to_string();
-        let msg = log_item.packet.text.as_ref().unwrap_or(&default).as_str();
-        let (mut x, mut y) = cursor::position().unwrap();
-        for c in msg.chars() {
-            if x >= cols - margin_x {
-                if y > rows - 4 {
-                    break;
+        //Depending on the packet, print different things.
+        match &log_item {
+            LogItem::ConnectLogItem { peer_addr, .. } => {
+                queue!(stdout,
+                    style::Print(
+                        format!("{} has successfully associated.", peer_addr.to_string())
+                    )
+                )?;
+                queue!(
+                    stdout,
+                    cursor::MoveDown(1),
+                    cursor::MoveToColumn(start_x),
+                )?;
+
+                (_, y) = cursor::position().unwrap();
+            },
+            LogItem::DisconnectLogItem { peer_addr, .. } => {
+                queue!(stdout,
+                    style::Print(
+                        format!("{} has disconnected.", peer_addr.to_string())
+                    )
+                )?;
+                queue!(
+                    stdout,
+                    cursor::MoveDown(1),
+                    cursor::MoveToColumn(start_x),
+                )?;
+
+                (_, y) = cursor::position().unwrap();
+            },
+            LogItem::PacketLogItem { peer_addr, packet, .. } => {
+                //Print the packet type.
+                queue!(stdout,
+                    style::Print(
+                        format!("{} | ", packet.packet_type.to_string())
+                    )
+                )?;
+
+                //Print the peer address.
+                queue!(stdout,
+                    style::Print(
+                        format!("{} | ", peer_addr.to_string())
+                    )
+                )?;
+
+                //Print the message text.
+                let default = "".to_string();
+                let msg = packet.text.as_ref().unwrap_or(&default).as_str();
+                let mut x;
+                (x, y) = cursor::position().unwrap();
+                for c in msg.chars() {
+                    if x >= cols - margin_x {
+                        if y > rows - 4 {
+                            break;
+                        }
+                        queue!(
+                            stdout,
+                            cursor::MoveDown(1),
+                            cursor::MoveToColumn(start_x),
+                        )?;
+                        x = start_x;
+                        y += 1;
+                    }
+                    queue!(stdout, style::Print(c))?;
+                    x += 1;
                 }
                 queue!(
                     stdout,
                     cursor::MoveDown(1),
-                    cursor::MoveToColumn(ascii_x),
+                    cursor::MoveToColumn(start_x),
                 )?;
-                x = ascii_x;
                 y += 1;
-            }
-            queue!(stdout, style::Print(c))?;
-            x += 1;
+            },
         }
-        queue!(
-            stdout,
-            cursor::MoveDown(1),
-            cursor::MoveToColumn(ascii_x),
-        )?;
-        y += 1;
 
         //Stop near the bottom of the screen.
         if y > rows - 3 {
@@ -855,7 +895,14 @@ fn handle_connection(mut connection: TcpStream, tx: Sender<LogItem>, log: Arc<Mu
             .peer_addr()
             .expect("Client is already connected.");
         let peer_addr_str = peer_addr.to_string();
+
+        //Send a connection notice to the packet_log.
         writeln!(log.lock().unwrap(), "INFO: Received connection from {peer_addr_str}.").unwrap();
+        let log_item = LogItem::ConnectLogItem {
+            timestamp: SystemTime::now(),
+            peer_addr: peer_addr,
+        };
+        tx.send(log_item).expect("Unable to send on channel.");
 
         loop {
             //Read exactly one packet from kernel's internal buffer and return it.
@@ -866,7 +913,7 @@ fn handle_connection(mut connection: TcpStream, tx: Sender<LogItem>, log: Arc<Mu
 
             //Send structured data from packet to main thread.
             if packet.is_some() {
-                let log_item = LogItem {
+                let log_item = LogItem::PacketLogItem {
                     timestamp: SystemTime::now(),
                     peer_addr: peer_addr,
                     packet: packet.unwrap()
@@ -874,6 +921,12 @@ fn handle_connection(mut connection: TcpStream, tx: Sender<LogItem>, log: Arc<Mu
 
                 tx.send(log_item).expect("Unable to send on channel.");
             } else {
+                //Send a disconnect notice to packet_log before exiting.
+                let log_item = LogItem::DisconnectLogItem {
+                    timestamp: SystemTime::now(),
+                    peer_addr: peer_addr,
+                };
+                tx.send(log_item).expect("Unable to send on channel.");
                 return;
             }
         }
@@ -928,10 +981,30 @@ impl Drop for WindowContext {
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-struct LogItem {
-    timestamp: SystemTime,
-    peer_addr: SocketAddr,
-    packet: Packet,
+enum LogItem {
+    PacketLogItem {
+        timestamp: SystemTime,
+        peer_addr: SocketAddr,
+        packet: Packet,
+    },
+    ConnectLogItem {
+        timestamp: SystemTime,
+        peer_addr: SocketAddr,
+    },
+    DisconnectLogItem {
+        timestamp: SystemTime,
+        peer_addr: SocketAddr,
+    }
+}
+
+impl LogItem {
+    fn timestamp(&self) -> SystemTime {
+        match self {
+            LogItem::PacketLogItem { timestamp, .. } => *timestamp,
+            LogItem::ConnectLogItem { timestamp, .. } => *timestamp,
+            LogItem::DisconnectLogItem { timestamp, .. } => *timestamp,
+        }
+    }
 }
 
 struct State {
