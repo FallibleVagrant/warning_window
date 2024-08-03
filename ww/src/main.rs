@@ -1099,7 +1099,7 @@ fn main() -> io::Result<()> {
         is_focused_mode: false,
     };
     let mut render_state = RenderState::rerender_all();
-    let mut frame_number: usize = 36041;
+    let mut frame_number: usize = SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards.").as_secs() as usize;    //test value 36041;
 
     let log = Arc::new(Mutex::new(File::create("./warning_window.log")?));
 
@@ -1130,7 +1130,7 @@ fn main() -> io::Result<()> {
         update(&mut state, &mut render_state, &rx, Arc::clone(&log))?;
         //Always render -- after 500 ms or when a key is pressed.
         render(&state, &mut render_state, Arc::clone(&log), frame_number)?;
-        frame_number += 1;
+        frame_number = frame_number.wrapping_add(1);
     }
 
     return Ok(());
