@@ -49,6 +49,7 @@ fn main() {
         },
     };
 
+    session.change_name("warn_client").expect("Immediately lost connection to the server.");
     let wc = init_window_context(800, 450, "warn_client");
     let mut msg = String::new();
     let mut err_msg = String::new();
