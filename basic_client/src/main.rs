@@ -9,9 +9,9 @@ fn main() {
         },
     };
 
+    session.change_name("test").unwrap();
     session.send_warn("incoming").unwrap();
     session.send_info("yes").unwrap();
     session.send_alert("no").unwrap();
-    session.change_name("hi").unwrap();
     loop {}
 }

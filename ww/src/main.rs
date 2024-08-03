@@ -114,8 +114,8 @@ impl WarnStateAsciiArt {
         match warn_state {
             WarnStates::None => {
                 //These return the index of the first \n, or the len().
-                return self.info_art.char_indices()                 //     ignore this, just for returning a tuple.
-                                    .find(|c| { c.1 == '\n' })      //     v
+                return self.info_art.char_indices()                 //        ignore this, just for returning a tuple.
+                                    .find(|c| { c.1 == '\n' })      //        v
                                     .unwrap_or_else(|| (self.info_art.len(), 'i')).0;
             },
             WarnStates::Warn => {
@@ -255,7 +255,7 @@ fn update(state: &mut State, render_state: &mut RenderState, rx: &Receiver<LogIt
         let log_item = log_item.unwrap();
 
         match &log_item {
-            LogItem::PacketLogItem { packet, .. } => {
+            LogItem::PacketLogItem { peer_addr, packet, .. } => {
                 match packet.packet_type {
                     PacketType::Warn => {
                         if state.warn_state != WarnStates::Alert {
@@ -267,8 +267,19 @@ fn update(state: &mut State, render_state: &mut RenderState, rx: &Receiver<LogIt
                         state.warn_state = WarnStates::Alert;
                         render_state.warn_state_changed = true;
                     },
+                    PacketType::Name => {
+                        if packet.text.is_some() {
+                            let name = packet.text.as_ref().unwrap();
+                            if name.len() < 25 {
+                                state.peer_names.insert(*peer_addr, name.clone());
+                            }
+                        }
+                    },
                     _ => (),
                 };
+            },
+            LogItem::DisconnectLogItem { peer_addr, .. } => {
+                state.peer_names.remove(peer_addr);
             },
             _ => (),
         }
@@ -443,7 +454,7 @@ fn render_warn_state(warn_art: &WarnStateAsciiArt, warn_state: &WarnStates, is_c
     return Ok(());
 }
 
-fn render_packet_log(packet_log: &VecDeque<LogItem>, warn_art_max_height: usize) -> io::Result<()> {
+fn render_packet_log(packet_log: &VecDeque<LogItem>, warn_art_max_height: usize, peer_names: &HashMap<SocketAddr, String>) -> io::Result<()> {
     let mut stdout = stdout();
 
     let (cols, rows) = terminal::size()?;
@@ -520,12 +531,35 @@ fn render_packet_log(packet_log: &VecDeque<LogItem>, warn_art_max_height: usize)
                     )
                 )?;
 
-                //Print the peer address.
-                queue!(stdout,
-                    style::Print(
-                        format!("{} | ", peer_addr.to_string())
-                    )
-                )?;
+                //Print the peer address/name.
+                //Look at this abomination. Rust, please.
+
+                let mut use_name = false;
+                let peer_name: &str;
+                //NAME packets always print the IP.
+                if let PacketType::Name = packet.packet_type {
+                    //Negation of if let statements not implemented yet.
+                }
+                else {
+                    let peer_name_option = peer_names.get(peer_addr);
+                    if peer_name_option.is_some() {
+                        use_name = true;
+                        peer_name = peer_name_option.unwrap();
+                        queue!(stdout,
+                            style::Print(
+                                format!("{} | ", peer_name)
+                            )
+                        )?;
+                    }
+                }
+
+                if !use_name {
+                    queue!(stdout,
+                        style::Print(
+                            format!("{} | ", peer_addr.to_string())
+                        )
+                    )?;
+                }
 
                 //Print the message text.
                 let default = "".to_string();
@@ -619,7 +653,7 @@ fn render(state: &State, render_state: &mut RenderState, log: Arc<Mutex<File>>, 
     }
 
     if render_state.packet_log_changed {
-        render_packet_log(&state.packet_log, state.warn_state_ascii_art.max_height())?;
+        render_packet_log(&state.packet_log, state.warn_state_ascii_art.max_height(), &state.peer_names)?;
     }
 
     stdout.flush()?;
@@ -1012,6 +1046,7 @@ struct State {
     warn_state_ascii_art: WarnStateAsciiArt,
     window_should_close: bool,
     packet_log: VecDeque<LogItem>,
+    peer_names: HashMap<SocketAddr, String>,
 
     is_focused_mode: bool,
 }
@@ -1050,7 +1085,7 @@ impl RenderState {
 use std::fs::File;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::collections::VecDeque;
+use std::collections::{VecDeque, HashMap};
 
 fn main() -> io::Result<()> {
     // env::set_var("RUST_BACKTRACE", "1");
@@ -1059,6 +1094,7 @@ fn main() -> io::Result<()> {
         warn_state_ascii_art: WarnStateAsciiArt::new(),
         window_should_close: false,
         packet_log: VecDeque::new(),
+        peer_names: HashMap::new(),
 
         is_focused_mode: false,
     };
