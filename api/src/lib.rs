@@ -46,6 +46,10 @@ impl Session {
         self.send(4, msg)
     }
 
+    pub fn change_name(&mut self, msg: &str) -> Result<(), Error> {
+        self.send(5, msg)
+    }
+
     fn send(&mut self, packet_type: u8, msg: &str) -> Result<(), Error> {
         let mut buf: [u8; 256] = [0; 256];
 
