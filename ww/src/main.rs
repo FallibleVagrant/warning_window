@@ -19,18 +19,6 @@ enum WarnStates {
 }
 
 impl WarnStates {
-    fn get_ascii_art_width(&self) -> u32 {
-        return 7;
-    }
-
-    fn get_ascii_art_height(&self) -> u32 {
-        match self {
-            Self::None => 3,
-            Self::Warn => 5,
-            Self::Alert => 4,
-        }
-    }
-
     fn to_string(&self) -> &str {
         match self {
             Self::None => "NONE",
@@ -51,26 +39,38 @@ struct WarnStateAsciiArt {
 }
 
 impl WarnStateAsciiArt {
+    fn default_info_art() -> String {
+        return concat!(
+            "  / \\  \n",
+            "       \n",
+            "  \\ /  \n",
+        ).to_string();
+    }
+
+    fn default_warn_art() -> String {
+        return concat!(
+            "       \n",
+            "       \n",
+            "   O   \n",
+            "  /|\\  \n",
+            "       \n",
+        ).to_string();
+    }
+
+    fn default_alert_art() -> String {
+        return concat!(
+            "   .   \n",
+            "  / \\  \n",
+            " / ! \\ \n",
+            "+-----+\n",
+        ).to_string();
+    }
+
     fn new() -> Self {
         return WarnStateAsciiArt {
-            info_art: concat!(
-                "  / \\  \n",
-                "       \n",
-                "  \\ /  \n",
-            ).to_string(),
-            warn_art: concat!(
-                "       \n",
-                "       \n",
-                "   O   \n",
-                "  /|\\  \n",
-                "       \n",
-            ).to_string(),
-            alert_art: concat!(
-                "   .   \n",
-                "  / \\  \n",
-                " / ! \\ \n",
-                "+-----+\n",
-            ).to_string(),
+            info_art: Self::default_info_art(),
+            warn_art: Self::default_warn_art(),
+            alert_art: Self::default_alert_art(),
 
             info_color: Color::Rgb { r: 24, g: 24, b: 24, },
             warn_color: Color::Rgb { r: 244, g: 131, b: 37, }, //Also try #FF9F43.
@@ -78,11 +78,20 @@ impl WarnStateAsciiArt {
         };
     }
 
-    fn build(info_art: &str, warn_art: &str, alert_art: &str) -> Self {
+    fn build(mut info_art: String, mut warn_art: String, mut alert_art: String) -> Self {
+        if info_art == "" {
+            info_art = Self::default_info_art();
+        }
+        if warn_art == "" {
+            warn_art = Self::default_warn_art();
+        }
+        if alert_art == "" {
+            alert_art = Self::default_alert_art();
+        }
         return WarnStateAsciiArt {
-            info_art: info_art.to_string(),
-            warn_art: warn_art.to_string(),
-            alert_art: alert_art.to_string(),
+            info_art: info_art,
+            warn_art: warn_art,
+            alert_art: alert_art,
 
             info_color: Color::Rgb { r: 24, g: 24, b: 24, },
             warn_color: Color::Rgb { r: 244, g: 131, b: 37, }, //Also try #FF9F43.
@@ -90,11 +99,20 @@ impl WarnStateAsciiArt {
         };
     }
 
-    fn build_with_color(info_art: &str, warn_art: &str, alert_art: &str, info_color: style::Color, warn_color: style::Color, alert_color: style::Color) -> Self {
+    fn build_with_color(mut info_art: String, mut warn_art: String, mut alert_art: String, info_color: style::Color, warn_color: style::Color, alert_color: style::Color) -> Self {
+        if info_art == "" {
+            info_art = Self::default_info_art();
+        }
+        if warn_art == "" {
+            warn_art = Self::default_warn_art();
+        }
+        if alert_art == "" {
+            alert_art = Self::default_alert_art();
+        }
         return WarnStateAsciiArt {
-            info_art: info_art.to_string(),
-            warn_art: warn_art.to_string(),
-            alert_art: alert_art.to_string(),
+            info_art: info_art,
+            warn_art: warn_art,
+            alert_art: alert_art,
 
             info_color,
             warn_color,
@@ -605,8 +623,8 @@ fn render(state: &State, render_state: &mut RenderState, log: Arc<Mutex<File>>, 
     let mut stdout = stdout();
 
     let (cols, rows) = terminal::size()?;
-    let min_cols = state.warn_state.get_ascii_art_width() as u16 + 10;
-    let min_rows = state.warn_state.get_ascii_art_height() as u16 + 10;
+    let min_cols = state.warn_state_ascii_art.width(&state.warn_state) as u16 + 10;
+    let min_rows = state.warn_state_ascii_art.height(&state.warn_state) as u16 + 10;
     if cols < min_cols || rows < min_rows {
         writeln!(log.lock().unwrap(), "ERROR: ascii art is too large to render on terminal.").unwrap();
         return Err(Error::new(
@@ -1082,16 +1100,83 @@ impl RenderState {
     }
 }
 
+fn print_usage() {
+    eprintln!("Usage: ww [Options]");
+    eprintln!("Accept networked notifications from client programs.");
+
+    eprintln!("--info-art <Path>: Change the info art with text found at Path. Art must be rectangular to render properly.");
+    eprintln!("--warn-art <Path>: Change the warn art with text found at Path. Art must be rectangular to render properly.");
+    eprintln!("--alert-art <Path>: Change the alert art with text found at Path. Art must be rectangular to render properly.");
+
+    eprintln!("--help: Show usage and exit.");
+}
+
 use std::fs::File;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::collections::{VecDeque, HashMap};
+use std::env;
 
 fn main() -> io::Result<()> {
     // env::set_var("RUST_BACKTRACE", "1");
+    let args: Vec<String> = env::args().collect();
+
+    if args.iter().any(|arg| arg == "--help") {
+        print_usage();
+        std::process::exit(0);
+    }
+
+    let info_art;
+    if let Some(i) = args.iter().position(|arg| arg == "--info-art") {
+        if i + 1 < args.len() {
+            info_art = std::fs::read_to_string(args[i + 1].clone()).unwrap_or_else(|_| {
+                print_usage();
+                std::process::abort();
+            });
+        }
+        else {
+            info_art = WarnStateAsciiArt::default_info_art();
+        }
+    }
+    else {
+        info_art = WarnStateAsciiArt::default_info_art();
+    }
+
+    let warn_art;
+    if let Some(i) = args.iter().position(|arg| arg == "--warn-art") {
+        if i + 1 < args.len() {
+            warn_art = std::fs::read_to_string(args[i + 1].clone()).unwrap_or_else(|_| {
+                print_usage();
+                std::process::abort();
+            });
+        }
+        else {
+            warn_art = WarnStateAsciiArt::default_warn_art();
+        }
+    }
+    else {
+        warn_art = WarnStateAsciiArt::default_warn_art();
+    }
+
+    let alert_art;
+    if let Some(i) = args.iter().position(|arg| arg == "--alert-art") {
+        if i + 1 < args.len() {
+            alert_art = std::fs::read_to_string(args[i + 1].clone()).unwrap_or_else(|_| {
+                print_usage();
+                std::process::abort();
+            });
+        }
+        else {
+            alert_art = WarnStateAsciiArt::default_alert_art();
+        }
+    }
+    else {
+        alert_art = WarnStateAsciiArt::default_alert_art();
+    }
+
     let mut state = State {
         warn_state: WarnStates::None,
-        warn_state_ascii_art: WarnStateAsciiArt::new(),
+        warn_state_ascii_art: WarnStateAsciiArt::build(info_art, warn_art, alert_art),
         window_should_close: false,
         packet_log: VecDeque::new(),
         peer_names: HashMap::new(),
