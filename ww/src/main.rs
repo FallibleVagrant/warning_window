@@ -1126,6 +1126,22 @@ fn main() -> io::Result<()> {
         std::process::exit(0);
     }
 
+    let listening_port: u16;
+    if let Some(i) = args.iter().position(|arg| arg == "-p") {
+        if i + 1 < args.len() {
+            listening_port = args[i + 1].parse().unwrap_or_else(|_| {
+                print_usage();
+                std::process::abort();
+            });
+        }
+        else {
+            listening_port = 44444;
+        }
+    }
+    else {
+        listening_port = 44444;
+    }
+
     let info_art;
     if let Some(i) = args.iter().position(|arg| arg == "--info-art") {
         if i + 1 < args.len() {
@@ -1197,7 +1213,7 @@ fn main() -> io::Result<()> {
     //The connection_manager thread lives as long as main.
     //It never exits, and continually handles incoming connections.
     let _connection_manager = thread::spawn(move || {
-        let listener = TcpListener::bind("localhost:44444").unwrap();
+        let listener = TcpListener::bind(format!("localhost:{}", listening_port)).unwrap();
 
         for connection in listener.incoming() {
             let mut __log = Arc::clone(&_log);
