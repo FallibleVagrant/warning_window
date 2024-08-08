@@ -22,6 +22,8 @@ Adhocrays, the custom Rust bindings, are [here](https://github.com/falliblevagra
 
 Building on Windows requires modifying the build script of adhocrays, since I don't have a machine to test on.
 
+Lastly, the server is a TUI and so uses [crossterm](https://github.com/crossterm-rs/crossterm), which cargo will download automatically.
+
 ## Build from Source
 To clone the repository, run:
 ```
