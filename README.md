@@ -5,14 +5,20 @@
 > [!WARNING]
 > This is a hobby project that is mostly finished. It won't be receiving new features.
 
-Description pending...
+warning_window is largely an experiment in writing a networking application with a binary protocol. Its functionality is similar to the `notify-send` command on most Linux distributions.
+
+The server component receives messages over the network from any number of clients. There are no controls in place to handle malicious clients, though, so don't expose the server to the public Internet unless it's through a tunnel that requires authorization first. If you are curious about the specifics of the protocol, there is a little documentation in the source code.
+
+The project was inspired by the small corner widget I implemented for [connwatch](https://github.com/falliblevagrant/adhocrays), as well as [this animation by vewn](https://www.youtube.com/watch?v=KJNWlMiL1zM&t=52) ([invidious link](https://iv.melmac.space/watch?v=KJNWlMiL1zM&t=52)).
 
 ## Dependencies
-This project uses Raylib, as well as my custom Rust bindings for it. Both are included as submodules of the repo.
-[https://github.com/raysan5/raylib](https://github.com/raysan5/raylib)
-[https://github.com/falliblevagrant/adhocrays](https://github.com/falliblevagrant/adhocrays)
+This project uses Raylib, as well as my custom Rust bindings for it. Both are included as submodules of this repo.
 
-Building on Windows requires modifying the build script of adhocrays. I don't have a Windows machine to test on.
+You may find Raylib [here](https://github.com/raysan5/raylib).
+
+Adhocrays, the custom Rust bindings, are [here](https://github.com/falliblevagrant/adhocrays).
+
+Building on Windows requires modifying the build script of adhocrays, since I don't have a machine to test on.
 
 ## Build from Source
 To clone the repository, run:
@@ -29,7 +35,7 @@ git submodule update --init --depth 1 --recursive
 ```
 It achieves the same effect.
 
-To run the server component:
+Once the repo is downloaded, run the server component with:
 ```
 cd ww
 cargo run
@@ -42,5 +48,6 @@ cargo run
 ```
 
 ## License
-warning_window is licensed under the GPL, see LICENSE for more information.
+warning_window is licensed under GPLv2, see LICENSE for more information.
+
 adhocrays and raylib are available under zlib licenses.
