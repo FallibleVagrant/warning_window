@@ -3,7 +3,7 @@
 ![demo](./demo.gif)
 
 > [!WARNING]
-> This is a hobby project that is mostly finished. It won't be receiving new features.
+> This is a hobby project that is mostly finished. It won't be receiving new features. If it does, those commits will be on Codeberg. [https://codeberg.org/FallibleVagrant/warning_window](https://codeberg.org/FallibleVagrant/warning_window)
 
 warning_window is largely an experiment in writing a networked application with a binary protocol. Its functionality is similar to the `notify-send` command on most Linux distributions.
 
